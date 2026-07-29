@@ -1,0 +1,210 @@
+{% extends "base.html" %}
+
+{% block title %}Založení účtu – fakturek{% endblock %}
+
+{% block content %}
+  <section class="stack-lg compact-form-page signup-page">
+    <div class="page-header">
+      <div class="page-header-copy">
+        <p class="page-kicker">Registrace</p>
+        <h1>Založení účtu</h1>
+        <p>Vytvoř si přístup a první fakturační subjekt. Po ověření e-mailu můžeš rovnou začít fakturovat.</p>
+      </div>
+    </div>
+
+    {% if not signup_enabled %}
+      <div class="notice error">
+        <p><strong>Registrace je v tomhle prostředí vypnutá.</strong></p>
+      </div>
+    {% endif %}
+
+    {% if error %}
+      <div class="notice error">
+        <p><strong>{{ error }}</strong></p>
+      </div>
+    {% endif %}
+
+    {% if info %}
+      <div class="notice success">
+        <p>{{ info }}</p>
+      </div>
+    {% endif %}
+
+    <form class="form signup-form signup-layout signup-layout-compact" method="post" action="/signup" data-signup-form>
+      {{ csrf_input(request)|safe }}
+      <input type="hidden" name="next" value="{{ next_url }}" />
+
+      <section class="registry-lookup-strip signup-lookup-strip">
+        <div>
+          <p class="dashboard-eyebrow">Rychlé doplnění</p>
+          <h2>Začni IČO, zbytek můžeš dopsat ručně</h2>
+          <p class="muted">Registrace založí účet a první fakturační subjekt. Účet aktivuješ odkazem, který ti pošleme e-mailem.</p>
+        </div>
+        <div class="registry-lookup-controls">
+          <div class="form-row">
+            <label for="subject_ico_lookup">IČO subjektu</label>
+            <input id="subject_ico_lookup" name="subject_ico" value="{{ prefill.subject_ico }}" inputmode="numeric" autocomplete="off" placeholder="např. 12345678" />
+          </div>
+          <button class="btn primary" type="submit" name="lookup_registry" value="1" formnovalidate data-signup-lookup>Načíst z registru</button>
+        </div>
+      </section>
+
+      <section class="card signup-card signup-account-card">
+        <div class="settings-card-head">
+          <div>
+            <p class="dashboard-eyebrow">Účet</p>
+            <h2>Přihlašovací údaje</h2>
+          </div>
+        </div>
+
+        <div class="settings-form-grid signup-account-grid">
+          <div class="form-row">
+            <label for="username">Uživatelské jméno</label>
+            <input id="username" name="username" value="{{ prefill.username }}" autocomplete="username" required autofocus />
+          </div>
+
+          <div class="form-row">
+            <label for="email">E-mail účtu</label>
+            <input id="email" name="email" type="email" value="{{ prefill.email }}" autocomplete="email" required />
+          </div>
+
+          <div class="form-row">
+            <label for="password">Heslo</label>
+            <input id="password" name="password" type="password" autocomplete="new-password" minlength="8" required data-signup-password aria-describedby="signup-password-hint" />
+            <small id="signup-password-hint" class="muted" data-signup-password-hint aria-live="polite">Alespoň 8 znaků.</small>
+          </div>
+
+          <div class="form-row">
+            <label for="password2">Heslo znovu</label>
+            <input id="password2" name="password2" type="password" autocomplete="new-password" required data-signup-password-confirm />
+          </div>
+        </div>
+      </section>
+
+      <section class="card signup-card signup-subject-card">
+        <div class="settings-card-head">
+          <div>
+            <p class="dashboard-eyebrow">První IČO</p>
+            <h2>Fakturační údaje</h2>
+            <p class="muted">ARES doplní základ, zbytek zkontroluj nebo uprav.</p>
+          </div>
+        </div>
+
+        <div class="settings-form-grid signup-subject-grid">
+          <div class="form-row settings-form-wide-row">
+            <label for="subject_name">Název / jméno subjektu</label>
+            <input id="subject_name" name="subject_name" value="{{ prefill.subject_name }}" required />
+          </div>
+
+          <div class="form-row">
+            <label for="subject_ico">IČO</label>
+            <input id="subject_ico" name="subject_ico_manual" value="{{ prefill.subject_ico }}" inputmode="numeric" data-subject-ico-manual />
+          </div>
+
+          <div class="form-row">
+            <label for="subject_dic">DIČ</label>
+            <input id="subject_dic" name="subject_dic" value="{{ prefill.subject_dic }}" />
+          </div>
+
+          <div class="form-row">
+            <label for="subject_email">E-mail subjektu</label>
+            <input id="subject_email" name="subject_email" type="email" value="{{ prefill.subject_email }}" placeholder="Může být stejný jako účet" />
+          </div>
+
+          <div class="form-row">
+            <label for="subject_phone">Telefon</label>
+            <input id="subject_phone" name="subject_phone" value="{{ prefill.subject_phone }}" />
+          </div>
+
+          <div class="form-row">
+            <label for="subject_country">Země</label>
+            <input id="subject_country" name="subject_country" value="CZ" readonly />
+          </div>
+
+          <div class="form-row">
+            <label for="subject_default_currency">Měna</label>
+            <select id="subject_default_currency" name="subject_default_currency">
+              {% for code, label in currency_options %}
+                <option value="{{ code }}" {% if (prefill.subject_default_currency or 'CZK') == code %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="form-row settings-form-wide-row">
+            <label for="subject_street">Ulice</label>
+            <input id="subject_street" name="subject_street" value="{{ prefill.subject_street }}" />
+          </div>
+
+          <div class="form-row">
+            <label for="subject_city">Město</label>
+            <input id="subject_city" name="subject_city" value="{{ prefill.subject_city }}" />
+          </div>
+
+          <div class="form-row">
+            <label for="subject_zip">PSČ</label>
+            <input id="subject_zip" name="subject_zip" value="{{ prefill.subject_zip }}" />
+          </div>
+
+          <div class="form-row settings-form-wide-row">
+            <label for="subject_bank_account">Bankovní účet</label>
+            <input id="subject_bank_account" name="subject_bank_account" value="{{ prefill.subject_bank_account }}" placeholder="např. 123456789/0100" />
+          </div>
+        </div>
+
+        <div class="signup-submit-row">
+          <p class="muted">Po potvrzení e-mailu tě pustíme do aplikace. Už máš účet? <a href="/login">Přihlas se</a>.</p>
+          <div class="form-actions">
+            <button class="btn primary" type="submit" data-signup-submit {% if not signup_enabled %}disabled{% endif %}>Vytvořit účet zdarma</button>
+          </div>
+        </div>
+      </section>
+    </form>
+  </section>
+{% endblock %}
+
+{% block scripts %}
+  {{ super() }}
+  <script>
+    (() => {
+      const form = document.querySelector('[data-signup-form]');
+      if (!form || !window.sessionStorage) return;
+
+      const lookupButton = form.querySelector('[data-signup-lookup]');
+      const lookupIcoInput = form.querySelector('#subject_ico_lookup');
+      const manualIcoInput = form.querySelector('[data-subject-ico-manual]');
+      const passwordInput = form.querySelector('[data-signup-password]');
+      const passwordHint = form.querySelector('[data-signup-password-hint]');
+
+      const syncIco = (source, target) => {
+        if (!source || !target) return;
+        target.value = source.value;
+      };
+
+      const refreshPasswordHint = () => {
+        if (!passwordInput || !passwordHint) return;
+        const value = passwordInput.value || '';
+        const shouldShowHint = value.length === 0 || value.length < 8;
+        passwordHint.hidden = !shouldShowHint;
+        const validationMessage = (passwordHint.textContent || 'Alespoň 8 znaků.').trim();
+        passwordInput.setCustomValidity(value.length > 0 && value.length < 8 ? validationMessage : '');
+      };
+
+      lookupIcoInput?.addEventListener('input', () => syncIco(lookupIcoInput, manualIcoInput));
+      manualIcoInput?.addEventListener('input', () => syncIco(manualIcoInput, lookupIcoInput));
+      passwordInput?.addEventListener('input', refreshPasswordHint);
+      passwordInput?.addEventListener('blur', refreshPasswordHint);
+      refreshPasswordHint();
+      syncIco(lookupIcoInput, manualIcoInput);
+
+      form.addEventListener('submit', (event) => {
+        const submitter = event.submitter;
+        const isLookup = submitter === lookupButton || submitter?.getAttribute('name') === 'lookup_registry';
+        syncIco(manualIcoInput, lookupIcoInput);
+        if (isLookup) {
+          syncIco(lookupIcoInput, manualIcoInput);
+          return;
+        }
+      });
+    })();
+  </script>
+{% endblock %}

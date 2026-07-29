@@ -1,0 +1,1919 @@
+openapi: 3.1.0
+info:
+  title: Fakturek API v1
+  version: 1.0.0-phase3
+paths:
+  /healthz:
+    get:
+      tags:
+      - meta
+      summary: API health
+      operationId: healthz_healthz_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /me:
+    get:
+      tags:
+      - auth
+      summary: Who am I
+      operationId: me_me_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+      security:
+      - HTTPBearer: []
+  /subjects:
+    get:
+      tags:
+      - subjects
+      summary: List accessible subjects
+      operationId: list_subjects_subjects_get
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: page
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          default: 1
+          title: Page
+      - name: per_page
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 100
+          minimum: 1
+          default: 50
+          title: Per Page
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubjectListResponse'
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Unauthorized
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /subjects/{subject_id}:
+    get:
+      tags:
+      - subjects
+      summary: Subject detail
+      operationId: get_subject_subjects__subject_id__get
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: subject_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Subject Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubjectSummaryModel'
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Unauthorized
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Forbidden
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Not Found
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /subjects/{subject_id}/contacts:
+    get:
+      tags:
+      - contacts
+      summary: List contacts
+      operationId: list_contacts_subjects__subject_id__contacts_get
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: subject_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Subject Id
+      - name: q
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Search by name, email or IČO
+          title: Q
+        description: Search by name, email or IČO
+      - name: page
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          default: 1
+          title: Page
+      - name: per_page
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 100
+          minimum: 1
+          default: 50
+          title: Per Page
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContactListResponse'
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Unauthorized
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Forbidden
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Not Found
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - contacts
+      summary: Create contact
+      operationId: create_contact_subjects__subject_id__contacts_post
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: subject_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Subject Id
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Idempotency-Key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ContactCreateRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContactModel'
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Unauthorized
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Forbidden
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Unprocessable Content
+  /subjects/{subject_id}/contacts/{contact_id}:
+    get:
+      tags:
+      - contacts
+      summary: Contact detail
+      operationId: get_contact_subjects__subject_id__contacts__contact_id__get
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: subject_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Subject Id
+      - name: contact_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Contact Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContactModel'
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Unauthorized
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Forbidden
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Not Found
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    patch:
+      tags:
+      - contacts
+      summary: Update contact
+      operationId: update_contact_subjects__subject_id__contacts__contact_id__patch
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: subject_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Subject Id
+      - name: contact_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Contact Id
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Idempotency-Key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ContactPatchRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContactModel'
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Unauthorized
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Forbidden
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Unprocessable Content
+  /subjects/{subject_id}/invoices:
+    get:
+      tags:
+      - invoices
+      summary: List invoices
+      operationId: list_invoices_subjects__subject_id__invoices_get
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: subject_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Subject Id
+      - name: q
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Search by invoice number, buyer name or variable symbol
+          title: Q
+        description: Search by invoice number, buyer name or variable symbol
+      - name: status
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Status
+      - name: document_type
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Document Type
+      - name: contact_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Contact Id
+      - name: overdue
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Overdue
+      - name: issue_date_from
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: date
+          - type: 'null'
+          title: Issue Date From
+      - name: issue_date_to
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: date
+          - type: 'null'
+          title: Issue Date To
+      - name: page
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          default: 1
+          title: Page
+      - name: per_page
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 100
+          minimum: 1
+          default: 50
+          title: Per Page
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvoiceListResponse'
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Unauthorized
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Forbidden
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Not Found
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - invoices
+      summary: Create draft invoice
+      operationId: create_invoice_subjects__subject_id__invoices_post
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: subject_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Subject Id
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Idempotency-Key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvoiceCreateRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvoiceDetailModel'
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Unauthorized
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Forbidden
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Unprocessable Content
+  /subjects/{subject_id}/invoices/{invoice_id}:
+    get:
+      tags:
+      - invoices
+      summary: Invoice detail
+      operationId: get_invoice_subjects__subject_id__invoices__invoice_id__get
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: subject_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Subject Id
+      - name: invoice_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Invoice Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvoiceDetailModel'
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Unauthorized
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Forbidden
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Not Found
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    patch:
+      tags:
+      - invoices
+      summary: Update draft invoice
+      operationId: update_invoice_subjects__subject_id__invoices__invoice_id__patch
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: subject_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Subject Id
+      - name: invoice_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Invoice Id
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Idempotency-Key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvoicePatchRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvoiceDetailModel'
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Unauthorized
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Forbidden
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Unprocessable Content
+  /subjects/{subject_id}/invoices/{invoice_id}/issue:
+    post:
+      tags:
+      - invoices
+      summary: Issue draft invoice
+      operationId: issue_invoice_subjects__subject_id__invoices__invoice_id__issue_post
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: subject_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Subject Id
+      - name: invoice_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Invoice Id
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Idempotency-Key
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvoiceDetailModel'
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Unauthorized
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Forbidden
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelopeModel'
+          description: Unprocessable Content
+components:
+  schemas:
+    ApiTokenSummaryModel:
+      properties:
+        id:
+          type: integer
+          title: Id
+        name:
+          type: string
+          title: Name
+        token_prefix:
+          type: string
+          title: Token Prefix
+        created_at:
+          type: string
+          title: Created At
+        last_used_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Last Used At
+        expires_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Expires At
+      type: object
+      required:
+      - id
+      - name
+      - token_prefix
+      - created_at
+      - last_used_at
+      - expires_at
+      title: ApiTokenSummaryModel
+    ContactCreateRequest:
+      properties:
+        name:
+          type: string
+          title: Name
+        email:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Email
+        phone:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Phone
+        street:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Street
+        city:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: City
+        zip:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Zip
+        country:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Country
+        ico:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ico
+        dic:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Dic
+        fixed_variable_symbol:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Fixed Variable Symbol
+      additionalProperties: false
+      type: object
+      required:
+      - name
+      title: ContactCreateRequest
+    ContactListResponse:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/ContactModel'
+          type: array
+          title: Items
+        page:
+          type: integer
+          title: Page
+        per_page:
+          type: integer
+          title: Per Page
+        total_items:
+          type: integer
+          title: Total Items
+        total_pages:
+          type: integer
+          title: Total Pages
+      type: object
+      required:
+      - items
+      - page
+      - per_page
+      - total_items
+      - total_pages
+      title: ContactListResponse
+    ContactModel:
+      properties:
+        id:
+          type: integer
+          title: Id
+        subject_id:
+          type: integer
+          title: Subject Id
+        name:
+          type: string
+          title: Name
+        email:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Email
+        phone:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Phone
+        street:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Street
+        city:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: City
+        zip:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Zip
+        country:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Country
+        ico:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ico
+        dic:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Dic
+        fixed_variable_symbol:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Fixed Variable Symbol
+        external_source:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: External Source
+        external_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: External Id
+        created_at:
+          type: string
+          title: Created At
+        updated_at:
+          type: string
+          title: Updated At
+      type: object
+      required:
+      - id
+      - subject_id
+      - name
+      - email
+      - phone
+      - street
+      - city
+      - zip
+      - country
+      - ico
+      - dic
+      - fixed_variable_symbol
+      - external_source
+      - external_id
+      - created_at
+      - updated_at
+      title: ContactModel
+    ContactPatchRequest:
+      properties:
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Name
+        email:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Email
+        phone:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Phone
+        street:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Street
+        city:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: City
+        zip:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Zip
+        country:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Country
+        ico:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ico
+        dic:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Dic
+        fixed_variable_symbol:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Fixed Variable Symbol
+      additionalProperties: false
+      type: object
+      title: ContactPatchRequest
+    ErrorEnvelopeModel:
+      properties:
+        error:
+          additionalProperties: true
+          type: object
+          title: Error
+        request_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Request Id
+      type: object
+      required:
+      - error
+      title: ErrorEnvelopeModel
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    HealthResponse:
+      properties:
+        status:
+          type: string
+          title: Status
+        version:
+          type: string
+          title: Version
+      type: object
+      required:
+      - status
+      - version
+      title: HealthResponse
+    InvoiceContactRefModel:
+      properties:
+        id:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Id
+        name:
+          type: string
+          title: Name
+      type: object
+      required:
+      - id
+      - name
+      title: InvoiceContactRefModel
+    InvoiceCreateRequest:
+      properties:
+        contact_id:
+          type: integer
+          title: Contact Id
+        issue_date:
+          anyOf:
+          - type: string
+            format: date
+          - type: 'null'
+          title: Issue Date
+        due_date:
+          anyOf:
+          - type: string
+            format: date
+          - type: 'null'
+          title: Due Date
+        currency:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Currency
+        document_type:
+          type: string
+          title: Document Type
+          default: invoice
+        source_invoice_id:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Source Invoice Id
+        series_id:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Series Id
+        bank_account_id:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Bank Account Id
+        payment_method:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Payment Method
+          default: bank_transfer
+        variable_symbol:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Variable Symbol
+        notes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Notes
+        internal_notes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Internal Notes
+        footer_mode:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Footer Mode
+        footer_text:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Footer Text
+        discount:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Discount
+          default: '0.00'
+        rounding_adjustment:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Rounding Adjustment
+          default: '0.00'
+        apply_auto_rounding:
+          type: boolean
+          title: Apply Auto Rounding
+          default: false
+        items:
+          items:
+            $ref: '#/components/schemas/InvoiceItemWriteModel'
+          type: array
+          title: Items
+      additionalProperties: false
+      type: object
+      required:
+      - contact_id
+      title: InvoiceCreateRequest
+    InvoiceDetailModel:
+      properties:
+        id:
+          type: integer
+          title: Id
+        subject_id:
+          type: integer
+          title: Subject Id
+        number:
+          type: string
+          title: Number
+        status:
+          type: string
+          title: Status
+        document_type:
+          type: string
+          title: Document Type
+        issue_date:
+          type: string
+          title: Issue Date
+        due_date:
+          type: string
+          title: Due Date
+        currency:
+          type: string
+          title: Currency
+        total:
+          type: string
+          title: Total
+        discount:
+          type: string
+          title: Discount
+        rounding_adjustment:
+          type: string
+          title: Rounding Adjustment
+        variable_symbol:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Variable Symbol
+        payment_method:
+          type: string
+          title: Payment Method
+        issued_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Issued At
+        sent_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Sent At
+        paid_on:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Paid On
+        pdf_available:
+          type: boolean
+          title: Pdf Available
+        contact:
+          $ref: '#/components/schemas/InvoiceContactRefModel'
+        public_link:
+          $ref: '#/components/schemas/InvoicePublicLinkModel'
+        notes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Notes
+        internal_notes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Internal Notes
+        source_invoice_id:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Source Invoice Id
+        series_id:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Series Id
+        footer_mode:
+          type: string
+          title: Footer Mode
+        footer_text:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Footer Text
+        bank_account_id:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Bank Account Id
+        bank_account_label:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Bank Account Label
+        bank_account_number:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Bank Account Number
+        bank_account_iban:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Bank Account Iban
+        bank_account_bic:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Bank Account Bic
+        bank_account_country:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Bank Account Country
+        items:
+          items:
+            $ref: '#/components/schemas/InvoiceItemModel'
+          type: array
+          title: Items
+        parties:
+          items:
+            $ref: '#/components/schemas/InvoicePartyModel'
+          type: array
+          title: Parties
+        payments:
+          items:
+            $ref: '#/components/schemas/PaymentModel'
+          type: array
+          title: Payments
+        created_at:
+          type: string
+          title: Created At
+        updated_at:
+          type: string
+          title: Updated At
+      type: object
+      required:
+      - id
+      - subject_id
+      - number
+      - status
+      - document_type
+      - issue_date
+      - due_date
+      - currency
+      - total
+      - discount
+      - rounding_adjustment
+      - variable_symbol
+      - payment_method
+      - issued_at
+      - sent_at
+      - paid_on
+      - pdf_available
+      - contact
+      - public_link
+      - notes
+      - internal_notes
+      - source_invoice_id
+      - series_id
+      - footer_mode
+      - footer_text
+      - bank_account_id
+      - bank_account_label
+      - bank_account_number
+      - bank_account_iban
+      - bank_account_bic
+      - bank_account_country
+      - items
+      - parties
+      - payments
+      - created_at
+      - updated_at
+      title: InvoiceDetailModel
+    InvoiceItemModel:
+      properties:
+        id:
+          type: integer
+          title: Id
+        description:
+          type: string
+          title: Description
+        quantity:
+          type: string
+          title: Quantity
+        unit:
+          type: string
+          title: Unit
+        unit_price:
+          type: string
+          title: Unit Price
+        vat_rate:
+          type: string
+          title: Vat Rate
+        line_net:
+          type: string
+          title: Line Net
+        line_vat:
+          type: string
+          title: Line Vat
+        line_total:
+          type: string
+          title: Line Total
+        sort_order:
+          type: integer
+          title: Sort Order
+      type: object
+      required:
+      - id
+      - description
+      - quantity
+      - unit
+      - unit_price
+      - vat_rate
+      - line_net
+      - line_vat
+      - line_total
+      - sort_order
+      title: InvoiceItemModel
+    InvoiceItemWriteModel:
+      properties:
+        description:
+          type: string
+          title: Description
+        quantity:
+          type: string
+          title: Quantity
+          default: '1.00'
+        unit:
+          type: string
+          title: Unit
+          default: ''
+        unit_price:
+          type: string
+          title: Unit Price
+          default: '0.00'
+        vat_rate:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Vat Rate
+      additionalProperties: false
+      type: object
+      required:
+      - description
+      title: InvoiceItemWriteModel
+    InvoiceListResponse:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/InvoiceSummaryModel'
+          type: array
+          title: Items
+        page:
+          type: integer
+          title: Page
+        per_page:
+          type: integer
+          title: Per Page
+        total_items:
+          type: integer
+          title: Total Items
+        total_pages:
+          type: integer
+          title: Total Pages
+      type: object
+      required:
+      - items
+      - page
+      - per_page
+      - total_items
+      - total_pages
+      title: InvoiceListResponse
+    InvoicePartyModel:
+      properties:
+        role:
+          type: string
+          title: Role
+        name:
+          type: string
+          title: Name
+        email:
+          type: string
+          title: Email
+        phone:
+          type: string
+          title: Phone
+        street:
+          type: string
+          title: Street
+        city:
+          type: string
+          title: City
+        zip:
+          type: string
+          title: Zip
+        country:
+          type: string
+          title: Country
+        ico:
+          type: string
+          title: Ico
+        dic:
+          type: string
+          title: Dic
+      type: object
+      required:
+      - role
+      - name
+      - email
+      - phone
+      - street
+      - city
+      - zip
+      - country
+      - ico
+      - dic
+      title: InvoicePartyModel
+    InvoicePatchRequest:
+      properties:
+        contact_id:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Contact Id
+        issue_date:
+          anyOf:
+          - type: string
+            format: date
+          - type: 'null'
+          title: Issue Date
+        due_date:
+          anyOf:
+          - type: string
+            format: date
+          - type: 'null'
+          title: Due Date
+        currency:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Currency
+        document_type:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Document Type
+        source_invoice_id:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Source Invoice Id
+        series_id:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Series Id
+        bank_account_id:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Bank Account Id
+        payment_method:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Payment Method
+        variable_symbol:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Variable Symbol
+        notes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Notes
+        internal_notes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Internal Notes
+        footer_mode:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Footer Mode
+        footer_text:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Footer Text
+        discount:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Discount
+        rounding_adjustment:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Rounding Adjustment
+        apply_auto_rounding:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Apply Auto Rounding
+        items:
+          anyOf:
+          - items:
+              $ref: '#/components/schemas/InvoiceItemWriteModel'
+            type: array
+          - type: 'null'
+          title: Items
+      additionalProperties: false
+      type: object
+      title: InvoicePatchRequest
+    InvoicePublicLinkModel:
+      properties:
+        enabled:
+          type: boolean
+          title: Enabled
+        url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Url
+        short_url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Short Url
+      type: object
+      required:
+      - enabled
+      - url
+      - short_url
+      title: InvoicePublicLinkModel
+    InvoiceSummaryModel:
+      properties:
+        id:
+          type: integer
+          title: Id
+        subject_id:
+          type: integer
+          title: Subject Id
+        number:
+          type: string
+          title: Number
+        status:
+          type: string
+          title: Status
+        document_type:
+          type: string
+          title: Document Type
+        issue_date:
+          type: string
+          title: Issue Date
+        due_date:
+          type: string
+          title: Due Date
+        currency:
+          type: string
+          title: Currency
+        total:
+          type: string
+          title: Total
+        discount:
+          type: string
+          title: Discount
+        rounding_adjustment:
+          type: string
+          title: Rounding Adjustment
+        variable_symbol:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Variable Symbol
+        payment_method:
+          type: string
+          title: Payment Method
+        issued_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Issued At
+        sent_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Sent At
+        paid_on:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Paid On
+        pdf_available:
+          type: boolean
+          title: Pdf Available
+        contact:
+          $ref: '#/components/schemas/InvoiceContactRefModel'
+        public_link:
+          $ref: '#/components/schemas/InvoicePublicLinkModel'
+      type: object
+      required:
+      - id
+      - subject_id
+      - number
+      - status
+      - document_type
+      - issue_date
+      - due_date
+      - currency
+      - total
+      - discount
+      - rounding_adjustment
+      - variable_symbol
+      - payment_method
+      - issued_at
+      - sent_at
+      - paid_on
+      - pdf_available
+      - contact
+      - public_link
+      title: InvoiceSummaryModel
+    MeResponse:
+      properties:
+        user:
+          $ref: '#/components/schemas/UserSummaryModel'
+        token:
+          $ref: '#/components/schemas/ApiTokenSummaryModel'
+        subjects:
+          items:
+            $ref: '#/components/schemas/SubjectSummaryModel'
+          type: array
+          title: Subjects
+      type: object
+      required:
+      - user
+      - token
+      - subjects
+      title: MeResponse
+    PaymentModel:
+      properties:
+        id:
+          type: integer
+          title: Id
+        paid_on:
+          type: string
+          title: Paid On
+        amount:
+          type: string
+          title: Amount
+        note:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Note
+        created_at:
+          type: string
+          title: Created At
+      type: object
+      required:
+      - id
+      - paid_on
+      - amount
+      - note
+      - created_at
+      title: PaymentModel
+    SubjectListResponse:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/SubjectSummaryModel'
+          type: array
+          title: Items
+        page:
+          type: integer
+          title: Page
+        per_page:
+          type: integer
+          title: Per Page
+        total_items:
+          type: integer
+          title: Total Items
+        total_pages:
+          type: integer
+          title: Total Pages
+      type: object
+      required:
+      - items
+      - page
+      - per_page
+      - total_items
+      - total_pages
+      title: SubjectListResponse
+    SubjectPermissionsModel:
+      properties:
+        role:
+          type: string
+          title: Role
+        can_view:
+          type: boolean
+          title: Can View
+        can_edit:
+          type: boolean
+          title: Can Edit
+        can_issue:
+          type: boolean
+          title: Can Issue
+      type: object
+      required:
+      - role
+      - can_view
+      - can_edit
+      - can_issue
+      title: SubjectPermissionsModel
+    SubjectSummaryModel:
+      properties:
+        id:
+          type: integer
+          title: Id
+        name:
+          type: string
+          title: Name
+        public_username:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Public Username
+        email:
+          type: string
+          title: Email
+        phone:
+          type: string
+          title: Phone
+        ico:
+          type: string
+          title: Ico
+        dic:
+          type: string
+          title: Dic
+        country:
+          type: string
+          title: Country
+        city:
+          type: string
+          title: City
+        zip:
+          type: string
+          title: Zip
+        street:
+          type: string
+          title: Street
+        default_currency:
+          type: string
+          title: Default Currency
+        is_vat_payer:
+          type: boolean
+          title: Is Vat Payer
+        tax_regime:
+          type: string
+          title: Tax Regime
+        permissions:
+          $ref: '#/components/schemas/SubjectPermissionsModel'
+      type: object
+      required:
+      - id
+      - name
+      - public_username
+      - email
+      - phone
+      - ico
+      - dic
+      - country
+      - city
+      - zip
+      - street
+      - default_currency
+      - is_vat_payer
+      - tax_regime
+      - permissions
+      title: SubjectSummaryModel
+    UserSummaryModel:
+      properties:
+        id:
+          type: integer
+          title: Id
+        username:
+          type: string
+          title: Username
+        email:
+          type: string
+          title: Email
+        is_active:
+          type: boolean
+          title: Is Active
+      type: object
+      required:
+      - id
+      - username
+      - email
+      - is_active
+      title: UserSummaryModel
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError
+  securitySchemes:
+    HTTPBearer:
+      type: http
+      scheme: bearer

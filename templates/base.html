@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="{{ ui_language or request.session.get('ui_language') or 'cs' }}" data-bs-theme="light" data-fakturek-theme-mode="{{ request.session.get('ui_theme') or 'system' }}" data-fakturek-ui-language="{{ ui_language or request.session.get('ui_language') or 'cs' }}">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{% block title %}fakturek{% endblock %}</title>
+    <script>
+      (function () {
+        var root = document.documentElement;
+        var mode = "{{ request.session.get('ui_theme') or 'system' }}";
+        var validModes = { system: true, auto: true, light: true, dark: true };
+
+        function normalize(nextMode) {
+          nextMode = String(nextMode || "system").toLowerCase();
+          return validModes[nextMode] ? nextMode : "system";
+        }
+
+        function resolve(nextMode) {
+          nextMode = normalize(nextMode);
+          if (nextMode === "light" || nextMode === "dark") return nextMode;
+          if (nextMode === "auto") {
+            var hour = new Date().getHours();
+            return hour >= 19 || hour < 7 ? "dark" : "light";
+          }
+          try {
+            return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+          } catch (error) {
+            return "light";
+          }
+        }
+
+        function apply(nextMode) {
+          var storedMode = normalize(nextMode);
+          var theme = resolve(storedMode);
+          root.setAttribute("data-bs-theme", theme);
+          root.setAttribute("data-fakturek-theme-mode", storedMode);
+          root.classList.add("fakturek-theme-switching");
+          try {
+            window.localStorage.setItem("tabler-theme", theme);
+            window.localStorage.setItem("fakturek-theme-mode", storedMode);
+          } catch (error) {}
+          if (document.body) {
+            document.body.classList.remove("theme-light", "theme-dark", "theme-mode-system", "theme-mode-auto", "theme-mode-light", "theme-mode-dark");
+            document.body.classList.add("theme-" + theme, "theme-mode-" + storedMode, "fakturek-theme-switching");
+          }
+          window.setTimeout(function () {
+            root.classList.remove("fakturek-theme-switching");
+            if (document.body) document.body.classList.remove("fakturek-theme-switching");
+          }, 180);
+          try {
+            window.dispatchEvent(new CustomEvent("fakturek:theme-applied", { detail: { mode: storedMode, theme: theme } }));
+          } catch (error) {}
+        }
+
+        window.fakturekTheme = { apply: apply, resolve: resolve, normalize: normalize };
+        apply(mode);
+        try {
+          var media = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)");
+          if (media && media.addEventListener) {
+            media.addEventListener("change", function () {
+              if (normalize(root.getAttribute("data-fakturek-theme-mode")) === "system") apply("system");
+            });
+          }
+        } catch (error) {}
+        window.setInterval(function () {
+          if (normalize(root.getAttribute("data-fakturek-theme-mode")) === "auto") apply("auto");
+        }, 60000);
+      })();
+    </script>
+
+    <link rel="stylesheet" href="/static/vendor/tabler-pro/dist/css/tabler.min.css?v=1.4.0-pro" />
+    <link rel="stylesheet" href="/static/vendor/tabler-pro/dist/css/tabler-themes.min.css?v=1.4.0-pro" />
+    <link rel="stylesheet" href="/static/vendor/tabler-pro/dist/css/tabler-vendors.min.css?v=1.4.0-pro" />
+    <link rel="stylesheet" href="/static/vendor/tabler/icons/tabler-icons.min.css?v=3.44.0" />
+    <link rel="stylesheet" href="/static/app.css?v={{ app_build }}-20260708-mobile-topbar" />
+    <link rel="stylesheet" href="/static/tabler-direct.css?v={{ app_build }}-20260708-mobile-topbar" />
+
+    {% block head_extra %}{% endblock %}
+    <script src="/static/vendor/tabler-pro/dist/js/tabler-theme.min.js?v=1.4.0-pro"></script>
+    {% if request.session.get('user_id') %}
+      <script>
+        window.addEventListener("pageshow", function (event) {
+          if (event.persisted) {
+            window.location.reload();
+          }
+        });
+      </script>
+    {% endif %}
+  </head>
+  <body class="theme-light theme-mode-{{ request.session.get('ui_theme') or 'system' }} tabler-direct tabler-horizontal">
+    <script>
+      if (window.fakturekTheme) window.fakturekTheme.apply("{{ request.session.get('ui_theme') or 'system' }}");
+    </script>
+    {% set path = request.url.path %}
+    {% set logged_in = request.session.get('user_id') %}
+    {% set app_nav_base = app_base_url|default('', true) %}
+    {% set topbar_subject = current_subject_nav or {} %}
+    {% set topbar_subjects = accessible_subjects_nav or [] %}
+
+    <div class="page">
+      <header class="navbar navbar-expand-md d-print-none fakturek-topbar">
+        <div class="container-xl">
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar-menu" aria-controls="navbar-menu" aria-expanded="false" aria-label="Menu">
+            <span class="navbar-toggler-icon"></span>
+          </button>
+
+          <a class="navbar-brand navbar-brand-autodark fakturek-public-brand" href="{{ app_nav_base or '/' }}">
+            <span class="avatar avatar-sm bg-primary text-white"><i class="ti ti-file-invoice"></i></span>
+            <span>Fakturek.cz</span>
+          </a>
+
+          <div class="navbar-nav flex-row order-md-last ms-auto fakturek-actions">
+            {% if logged_in %}
+              {% set current_language = ui_language or request.session.get('ui_language') or 'cs' %}
+              {% set next_language = 'en' if current_language == 'cs' else 'cs' %}
+              <form method="post" action="/settings/language" class="inline-form fakturek-language-toggle-form" data-language-form>
+                {{ csrf_input(request)|safe }}
+                <input type="hidden" name="ui_language" value="{{ next_language }}" />
+                <input type="hidden" name="next" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}" />
+                <button class="nav-link px-0 fakturek-icon-btn fakturek-language-toggle" type="submit" title="{% if current_language == 'cs' %}Switch to English{% else %}Přepnout do češtiny{% endif %}" aria-label="{% if current_language == 'cs' %}Switch to English{% else %}Přepnout do češtiny{% endif %}">
+                  <span class="fakturek-lang-pill">{{ current_language|upper }}</span>
+                </button>
+              </form>
+              {% set current_theme = request.session.get('ui_theme') or 'system' %}
+              <details class="dropdown fakturek-theme-menu" data-theme-menu data-topbar-menu>
+                <summary class="nav-link px-0 fakturek-icon-btn" title="Vzhled aplikace" aria-label="Vzhled aplikace">
+                  <i class="ti {% if current_theme == 'dark' %}ti-moon{% else %}ti-sun{% endif %}" data-theme-menu-icon></i>
+                </summary>
+                <div class="dropdown-menu dropdown-menu-end fakturek-theme-menu-panel">
+                  <div class="dropdown-header">Vzhled aplikace</div>
+                  {% for value, label in ui_theme_options %}
+                    <form method="post" action="/settings/theme" class="inline-form" data-theme-form>
+                      {{ csrf_input(request)|safe }}
+                      <input type="hidden" name="ui_theme" value="{{ value }}" />
+                      <input type="hidden" name="next" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}" />
+                      <button class="dropdown-item fakturek-theme-choice {% if current_theme == value %}active{% endif %}" type="submit" data-theme-choice="{{ value }}">
+                        <span>
+                          <i class="ti {% if value == 'dark' %}ti-moon{% elif value == 'light' %}ti-sun{% elif value == 'auto' %}ti-clock{% else %}ti-device-desktop{% endif %} me-2"></i>
+                          {{ label }}
+                        </span>
+                        {% if current_theme == value %}<i class="ti ti-check text-primary"></i>{% endif %}
+                      </button>
+                    </form>
+                  {% endfor %}
+                </div>
+              </details>
+              <details class="dropdown fakturek-subject" data-topbar-menu>
+                <summary class="nav-link d-flex lh-1 text-reset p-0 fakturek-subject-summary">
+                  <span class="avatar avatar-sm bg-primary-lt text-primary">{{ (request.session.get('username') or 'U')[:1]|upper }}</span>
+                  <span class="ms-2 fakturek-subject-copy">
+                    <span class="text-body fw-semibold">{{ request.session.get('username') }}</span>
+                    <span class="text-secondary small">
+                      {{ topbar_subject.name or 'Bez aktivní organizace' }}{% if topbar_subject.ico %} · IČO {{ topbar_subject.ico }}{% endif %}
+                    </span>
+                  </span>
+                </summary>
+                <div class="dropdown-menu dropdown-menu-end fakturek-subject-menu">
+                  <div class="dropdown-header">Aktivní organizace</div>
+                  {% for subject in topbar_subjects %}
+                    {% if subject.is_current %}
+                      <div class="dropdown-item-text fakturek-subject-item is-current">
+                        <span>
+                          <strong>{{ subject.name }}</strong>
+                          <small>{% if subject.ico %}IČO {{ subject.ico }}{% else %}Bez IČO{% endif %}{% if subject.role %} · {{ subject.role|subject_role }}{% endif %}</small>
+                        </span>
+                        <span class="badge bg-primary-lt">Aktivní</span>
+                      </div>
+                    {% else %}
+                      <form method="post" action="/subjects/{{ subject.id }}/switch">
+                        {{ csrf_input(request)|safe }}
+                        <input type="hidden" name="next" value="{{ subject.topbar_switch_form.next }}" />
+                        {% if subject.topbar_switch_form.st %}<input type="hidden" name="st" value="{{ subject.topbar_switch_form.st }}" />{% endif %}
+                        <button class="dropdown-item fakturek-subject-item" type="submit">
+                          <span>
+                            <strong>{{ subject.name }}</strong>
+                            <small>{% if subject.ico %}IČO {{ subject.ico }}{% else %}Bez IČO{% endif %}{% if subject.role %} · {{ subject.role|subject_role }}{% endif %}</small>
+                          </span>
+                        </button>
+                      </form>
+                    {% endif %}
+                  {% else %}
+                    <div class="dropdown-item-text text-secondary">Zatím nemáš přiřazenou žádnou organizaci.</div>
+                  {% endfor %}
+                  <div class="dropdown-divider"></div>
+                  <a class="dropdown-item" href="{{ app_nav_base }}/settings#subjects-admin"><i class="ti ti-building me-2"></i>Správa organizací</a>
+                  <form method="post" action="/logout" class="inline-form fakturek-subject-logout">
+                    {{ csrf_input(request)|safe }}
+                    <input type="hidden" name="next" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}" />
+                    <button class="dropdown-item" type="submit"><i class="ti ti-logout me-2"></i>Odhlásit</button>
+                  </form>
+                </div>
+              </details>
+              <form method="post" action="/logout" class="inline-form">
+                {{ csrf_input(request)|safe }}
+                <input type="hidden" name="next" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}" />
+                <button class="btn btn-outline-secondary" type="submit">Odhlásit</button>
+              </form>
+            {% else %}
+              {% if path not in ['/login', '/signup'] %}
+                {% if signup_enabled %}<a class="btn" href="{{ app_nav_base }}/signup">Založit účet</a>{% endif %}
+                <a class="btn btn-primary" href="{{ app_nav_base }}/login">Přihlásit</a>
+              {% endif %}
+            {% endif %}
+          </div>
+        </div>
+      </header>
+
+      {% if logged_in %}
+        <header class="navbar-expand-md fakturek-navrow">
+          <div class="collapse navbar-collapse" id="navbar-menu">
+            <div class="navbar">
+              <div class="container-xl">
+                <ul class="navbar-nav">
+                  <li class="nav-item {% if path == '/' %}active{% endif %}">
+                    <a class="nav-link" href="{{ app_nav_base or '/' }}">
+                      <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-home"></i></span>
+                      <span class="nav-link-title">Přehled</span>
+                    </a>
+                  </li>
+                  <li class="nav-item {% if path.startswith('/contacts') %}active{% endif %}">
+                    <a class="nav-link" href="{{ app_nav_base }}/contacts">
+                      <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-address-book"></i></span>
+                      <span class="nav-link-title">Kontakty</span>
+                    </a>
+                  </li>
+                  <li class="nav-item {% if path.startswith('/invoices') or path.startswith('/recurring') %}active{% endif %}">
+                    <a class="nav-link" href="{{ app_nav_base }}/invoices">
+                      <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-file-invoice"></i></span>
+                      <span class="nav-link-title">Faktury</span>
+                    </a>
+                  </li>
+                  <li class="nav-item {% if path.startswith('/payments') %}active{% endif %}">
+                    <a class="nav-link" href="{{ app_nav_base }}/payments">
+                      <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-credit-card"></i></span>
+                      <span class="nav-link-title">Platby</span>
+                    </a>
+                  </li>
+                  <li class="nav-item {% if path.startswith('/stats') %}active{% endif %}">
+                    <a class="nav-link" href="{{ app_nav_base }}/stats">
+                      <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-chart-bar"></i></span>
+                      <span class="nav-link-title">Statistiky</span>
+                    </a>
+                  </li>
+                  <li class="nav-item {% if path.startswith('/imports') %}active{% endif %}">
+                    <a class="nav-link" href="{{ app_nav_base }}/imports">
+                      <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-arrows-transfer-up-down"></i></span>
+                      <span class="nav-link-title">Export/Import</span>
+                    </a>
+                  </li>
+                  <li class="nav-item {% if path.startswith('/settings') %}active{% endif %}">
+                    <a class="nav-link" href="{{ app_nav_base }}/settings">
+                      <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-settings"></i></span>
+                      <span class="nav-link-title">Nastavení</span>
+                    </a>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </header>
+      {% endif %}
+
+      <div class="page-wrapper">
+        <div class="page-body">
+          <main class="container-xl">
+            {% block content %}{% endblock %}
+          </main>
+        </div>
+
+        <footer class="footer footer-transparent d-print-none">
+          <div class="container-xl">
+            <div class="text-center text-secondary fakturek-footer">
+              Vytvořil <strong>Michal Janoušek</strong> v roce <strong>2026</strong>.
+              <span>Fakturek pro klidnější fakturaci.</span>
+              <span>·</span>
+              <a href="https://fakturek.cz/pages/obchodni-podminky.html" target="_blank" rel="noopener noreferrer">Podmínky</a>
+              <span>·</span>
+              <a href="https://fakturek.cz/pages/ochrana-osobnich-udaju.html" target="_blank" rel="noopener noreferrer">GDPR</a>
+              <span>·</span>
+              <a href="https://fakturek.cz/pages/kontakt.html" target="_blank" rel="noopener noreferrer">Kontakt</a>
+            </div>
+          </div>
+        </footer>
+      </div>
+    </div>
+
+    {% block scripts %}{% endblock %}
+    {% if (ui_language or request.session.get('ui_language') or 'cs') == 'en' %}
+      <script>window.fakturekI18n = {{ ui_i18n_payload | tojson }};</script>
+      <script defer src="/static/i18n.js?v={{ app_build }}-20260706-i18n"></script>
+    {% endif %}
+    <script defer src="/static/vendor/tabler-pro/dist/js/tabler.min.js?v=1.4.0-pro"></script>
+    <script>
+      (function () {
+        function fallbackCopy(value) {
+          var textarea = document.createElement("textarea");
+          textarea.value = value;
+          textarea.setAttribute("readonly", "");
+          textarea.style.position = "fixed";
+          textarea.style.left = "-9999px";
+          document.body.appendChild(textarea);
+          textarea.select();
+          try { document.execCommand("copy"); } catch (error) {}
+          document.body.removeChild(textarea);
+        }
+
+        document.addEventListener("click", function (event) {
+          var target = event.target;
+          if (!target || !target.closest) return;
+          var button = target.closest("[data-copy-value]");
+          if (!button) return;
+          event.preventDefault();
+          var value = button.getAttribute("data-copy-value") || "";
+          if (!value) return;
+          var original = button.getAttribute("data-copy-label") || button.textContent || "Kopírovat";
+          var done = function () {
+            button.textContent = "Zkopírováno";
+            window.setTimeout(function () { button.textContent = original; }, 1400);
+          };
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(value).then(done).catch(function () {
+              fallbackCopy(value);
+              done();
+            });
+          } else {
+            fallbackCopy(value);
+            done();
+          }
+        });
+      })();
+    </script>
+
+    <script data-fakturek-topbar-dropdown-controller>
+      (function () {
+        var menuSelector = "details[data-topbar-menu]";
+
+        function elementFromTarget(target) {
+          if (!target) return null;
+          return target.nodeType === 1 ? target : target.parentElement;
+        }
+
+        function menuFromTarget(target) {
+          var element = elementFromTarget(target);
+          return element && element.closest ? element.closest(menuSelector) : null;
+        }
+
+        function summaryFromTarget(target) {
+          var element = elementFromTarget(target);
+          if (!element || !element.closest) return null;
+          var summary = element.closest("summary");
+          if (!summary) return null;
+          var menu = summary.parentElement;
+          return menu && menu.matches && menu.matches(menuSelector) ? summary : null;
+        }
+
+        function syncMenu(menu) {
+          if (!menu) return;
+          var summary = menu.querySelector("summary");
+          if (summary) {
+            summary.setAttribute("aria-expanded", menu.open ? "true" : "false");
+            summary.setAttribute("aria-haspopup", "menu");
+          }
+        }
+
+        function syncThemeMenuIcon() {
+          var icon = document.querySelector("[data-theme-menu-icon]");
+          if (!icon) return;
+          var theme = document.documentElement.getAttribute("data-bs-theme") === "dark" ? "dark" : "light";
+          icon.classList.remove("ti-clock", "ti-device-desktop", "ti-sun", "ti-moon");
+          icon.classList.add(theme === "dark" ? "ti-moon" : "ti-sun");
+        }
+
+        function closeTopbarMenus(except) {
+          document.querySelectorAll(menuSelector + "[open]").forEach(function (menu) {
+            if (except && menu === except) return;
+            menu.removeAttribute("open");
+            syncMenu(menu);
+          });
+        }
+
+        function setMenuOpen(menu, open) {
+          if (!menu || !menu.matches || !menu.matches(menuSelector)) return;
+          if (open) {
+            closeTopbarMenus(menu);
+            menu.setAttribute("open", "");
+          } else {
+            menu.removeAttribute("open");
+          }
+          syncMenu(menu);
+        }
+
+        function toggleSummary(summary) {
+          var menu = summary && summary.parentElement;
+          if (!menu || !menu.matches || !menu.matches(menuSelector)) return;
+          setMenuOpen(menu, !menu.open);
+          if (summary.focus) summary.focus();
+        }
+
+        function interceptSummaryActivation(event) {
+          var summary = summaryFromTarget(event.target);
+          if (!summary) return false;
+          event.preventDefault();
+          event.stopPropagation();
+          if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+          toggleSummary(summary);
+          return true;
+        }
+
+        document.addEventListener("click", function (event) {
+          if (interceptSummaryActivation(event)) return;
+          if (!menuFromTarget(event.target)) closeTopbarMenus(null);
+        }, true);
+
+        document.addEventListener("pointerdown", function (event) {
+          if (!menuFromTarget(event.target)) closeTopbarMenus(null);
+        }, true);
+
+        document.addEventListener("focusin", function (event) {
+          if (!menuFromTarget(event.target)) closeTopbarMenus(null);
+        }, true);
+
+        document.addEventListener("toggle", function (event) {
+          var menu = event.target;
+          if (!menu || !menu.matches || !menu.matches(menuSelector)) return;
+          if (menu.open) closeTopbarMenus(menu);
+          syncMenu(menu);
+        }, true);
+
+        document.addEventListener("keydown", function (event) {
+          var summary = summaryFromTarget(event.target);
+          if (summary && (event.key === "Enter" || event.key === " ")) {
+            interceptSummaryActivation(event);
+            return;
+          }
+          if (event.key !== "Escape") return;
+          var openMenu = document.querySelector(menuSelector + "[open]");
+          if (!openMenu) return;
+          event.preventDefault();
+          var openSummary = openMenu.querySelector("summary");
+          closeTopbarMenus(null);
+          if (openSummary && openSummary.focus) openSummary.focus();
+        }, true);
+
+        document.addEventListener("submit", function (event) {
+          var form = event.target;
+          if (!form || !form.matches || !form.matches("[data-theme-form], [data-language-form]")) return;
+          if (form.matches("[data-theme-form]")) {
+            var input = form.querySelector('input[name="ui_theme"]');
+            var mode = input ? input.value : "system";
+            try {
+              if (window.fakturekTheme) window.fakturekTheme.apply(mode);
+              syncThemeMenuIcon();
+              closeTopbarMenus(null);
+            } catch (error) {}
+            return;
+          }
+          closeTopbarMenus(null);
+        }, true);
+
+        document.addEventListener("DOMContentLoaded", function () {
+          document.querySelectorAll(menuSelector).forEach(syncMenu);
+          syncThemeMenuIcon();
+        });
+        window.addEventListener("fakturek:theme-applied", syncThemeMenuIcon);
+        document.querySelectorAll(menuSelector).forEach(syncMenu);
+        syncThemeMenuIcon();
+      })();
+    </script>
+  </body>
+</html>

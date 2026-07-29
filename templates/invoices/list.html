@@ -1,0 +1,451 @@
+{% extends "base.html" %}
+
+{% block title %}Doklady – fakturek{% endblock %}
+
+{% block content %}
+  <section class="stack-lg">
+    <div class="page-header">
+      <div class="page-header-copy">
+        <p class="page-kicker">Doklady</p>
+        <h1>Faktury, nabídky, dobropisy a zálohovky</h1>
+        <p>Jeden seznam pro běžné faktury, nabídky, dobropisy i zálohové faktury. Typ dokladu poznáš hned v řádku a můžeš ho i filtrovat.</p>
+      </div>
+      <div class="page-header-actions">
+        <a class="btn primary" href="/invoices/new">+ Nová faktura</a>
+        <a class="btn" href="/invoices/new?document_type=quote">+ Nabídka</a>
+        <a class="btn{% if credit_note_mode %} primary{% endif %}" href="/invoices?document_type=invoice&credit_note_mode=1">+ Dobropis</a>
+        <a class="btn" href="/invoices/new?document_type=proforma">+ Zálohová faktura</a>
+        <a class="btn{% if filters and filters.status == 'draft' %} primary{% endif %}" href="/invoices?status=draft">
+          Koncepty{% if draft_invoice_count is defined and draft_invoice_count %} ({{ draft_invoice_count }}){% endif %}
+        </a>
+        <a class="btn" href="/recurring">Automatické faktury</a>
+        <a class="btn" href="/imports">Export/Import</a>
+      </div>
+    </div>
+
+    {% if notice %}
+      <p class="notice success">{{ notice }}</p>
+    {% endif %}
+
+    {% if error %}
+      <p class="notice error"><strong>Chyba:</strong> {{ error }}</p>
+    {% endif %}
+
+    {% include "_setup_warnings.html" %}
+
+    {% if credit_note_mode %}
+      <div class="notice">
+        <strong>Režim dobropisu:</strong> vyber původní vystavenou fakturu a z ní vytvoříme navázaný dobropis.
+        <a href="/invoices" style="margin-left:0.55rem;">Zrušit výběr</a>
+      </div>
+    {% elif filters and filters.status == 'draft' %}
+      <div class="notice">
+        <strong>Koncepty:</strong> tady jsou rozpracované doklady s interním DRAFT-ID. Finální číslo dostanou až po vystavení.
+        <a href="/invoices" style="margin-left:0.55rem;">Zobrazit všechny doklady</a>
+      </div>
+    {% endif %}
+
+    <div class="card">
+      <form method="get" action="/invoices" class="filters">
+        {% if credit_note_mode %}
+          <input type="hidden" name="credit_note_mode" value="true" />
+        {% endif %}
+        <div class="filters-row">
+          <div class="field">
+            <label for="q">Hledat</label>
+            <input id="q" name="q" placeholder="číslo faktury / jméno" value="{{ (filters.q if filters else '') }}" />
+          </div>
+
+          <div class="field">
+            <label for="status">Stav</label>
+            <select id="status" name="status">
+              <option value="" {% if not filters or not filters.status %}selected{% endif %}>Vše</option>
+              {% set statuses = allowed_statuses or ["draft", "issued", "sent", "paid"] %}
+              {% for s in statuses %}
+                <option value="{{ s }}" {% if filters and filters.status == s %}selected{% endif %}>{{ s | invoice_status }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="document_type">Typ</label>
+            <select id="document_type" name="document_type">
+              <option value="" {% if not filters or not filters.document_type %}selected{% endif %}>Všechny</option>
+              {% for value, label in (document_type_options or []) %}
+                <option value="{{ value }}" {% if filters and filters.document_type == value %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="contact_id">Odběratel</label>
+            <select id="contact_id" name="contact_id">
+              <option value="" {% if not filters or not filters.contact_id %}selected{% endif %}>Všichni</option>
+              {% for c in (contacts or []) %}
+                <option value="{{ c.id }}" {% if filters and filters.contact_id == c.id %}selected{% endif %}>
+                  {{ c.name }}
+                </option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="field checkbox">
+            <label for="overdue">&nbsp;</label>
+            <label class="checkbox-inline">
+              <input id="overdue" name="overdue" type="checkbox" value="true" {% if filters and filters.overdue %}checked{% endif %} />
+              Jen po splatnosti
+            </label>
+          </div>
+
+          <div class="field actions">
+            <label>&nbsp;</label>
+            <div class="toolbar">
+              <button class="btn primary" type="submit">Filtrovat</button>
+              <a class="btn" href="/invoices">Vyčistit</a>
+            </div>
+          </div>
+        </div>
+
+        {% if invoices is defined %}
+          <p class="filters-summary">
+            Zobrazeno:
+            <strong>{{ pagination.from_item if pagination else 0 }}–{{ pagination.to_item if pagination else (invoices | length) }}</strong>
+            z <strong>{{ pagination.total_count if pagination else (invoices | length) }}</strong>
+            · CSV export respektuje aktuální filtry
+          </p>
+        {% endif %}
+      </form>
+    </div>
+
+    {% if invoices %}
+      <div class="card bulk-toolbar-card">
+        <form method="post" action="/invoices/bulk-status" id="bulk-invoices-form" class="bulk-toolbar-form">
+          {{ csrf_input(request)|safe }}
+          <input type="hidden" name="next" value="{{ next_url or '/invoices' }}" />
+          <div class="bulk-toolbar">
+            <div class="bulk-toolbar-copy">
+              <p class="dashboard-eyebrow">Hromadná úprava</p>
+              <strong>Vybráno <span data-bulk-selected-count>0</span> dokladů</strong>
+              <span>Vyber si faktury na aktuální stránce a jedním krokem je uprav.</span>
+            </div>
+            <div class="bulk-toolbar-controls">
+              <label class="checkbox-inline bulk-toolbar-select-all">
+                <input id="bulk-select-all" type="checkbox" />
+                Vybrat vše na stránce
+              </label>
+              <select name="action" id="bulk-action">
+                <option value="">Vyber akci</option>
+                {% for value, label in (bulk_action_options or []) %}
+                  <option value="{{ value }}">{{ label }}</option>
+                {% endfor %}
+              </select>
+              <label class="bulk-paid-date">
+                <span>Uhrazeno</span>
+                <input type="date" name="paid_on" value="{{ today }}" />
+              </label>
+              <button class="btn primary" type="submit" data-bulk-submit disabled>Provést hromadně</button>
+            </div>
+          </div>
+        </form>
+      </div>
+
+      <div class="table-wrap invoice-list-table-wrap">
+        <table class="table responsive-card-table invoice-list-mobile-table" data-responsive-card-table>
+          <thead>
+            <tr>
+              <th class="selection-cell">✓</th>
+              <th>Číslo</th>
+              <th>Odběratel</th>
+              <th>Vystaveno</th>
+              <th>Splatnost</th>
+              <th>Stav</th>
+              <th>Celkem</th>
+              <th>Akce</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for inv in invoices %}
+              {% set is_overdue = (today is defined) and (inv.due_date < today) and (inv.status not in ['paid', 'cancelled']) %}
+              {% set is_credit_note = (inv.document_type or 'invoice') == 'credit_note' %}
+              {% set revert_status = none %}
+              {% set revert_label = none %}
+              {% if inv.status == 'paid' %}
+                {% if inv.sent_at %}
+                  {% set revert_status = 'sent' %}
+                  {% set revert_label = 'Vrátit na odeslanou' %}
+                {% else %}
+                  {% set revert_status = 'issued' %}
+                  {% set revert_label = 'Vrátit na vystavenou' %}
+                {% endif %}
+              {% elif inv.status == 'sent' %}
+                {% set revert_status = 'issued' %}
+                {% set revert_label = 'Vrátit na vystavenou' %}
+              {% elif inv.status == 'issued' %}
+                {% set revert_status = 'draft' %}
+                {% set revert_label = 'Vrátit na koncept' %}
+              {% elif inv.status == 'cancelled' %}
+                {% if inv.sent_at %}
+                  {% set revert_status = 'sent' %}
+                  {% set revert_label = 'Obnovit odeslanou' %}
+                {% else %}
+                  {% set revert_status = 'issued' %}
+                  {% set revert_label = 'Obnovit vystavenou' %}
+                {% endif %}
+              {% endif %}
+              {% set can_mark_paid = inv.status in ['issued', 'sent'] %}
+              {% set can_cancel = inv.status in ['issued', 'sent', 'paid'] %}
+              {% set can_delete = true %}
+              {% set can_create_credit_note = (inv.document_type or 'invoice') == 'invoice' and inv.status in ['issued', 'sent', 'paid'] %}
+              {% set can_revert = revert_status and revert_label %}
+              {% set can_send_reminder = is_overdue and (not is_credit_note) and smtp_ready and inv.status not in ['draft', 'paid', 'cancelled'] and inv.contact.email %}
+              {% set has_row_actions = can_mark_paid or can_cancel or can_delete or can_create_credit_note or can_revert or can_send_reminder %}
+              <tr class="{% if is_overdue %}row-overdue{% endif %}" data-bulk-row>
+                <td class="selection-cell" data-label="Vybrat">
+                  <input
+                    type="checkbox"
+                    name="invoice_ids"
+                    value="{{ inv.id }}"
+                    form="bulk-invoices-form"
+                    class="bulk-row-checkbox"
+                    data-bulk-checkbox
+                    aria-label="Vybrat doklad {{ inv.number }}"
+                  />
+                </td>
+                <td data-label="Číslo">
+                  <a href="/invoices/{{ inv.id }}">{{ inv.number }}</a>
+                  <div class="muted" style="margin-top:0.2rem;">
+                    {% if inv.status == 'draft' %}
+                      Rozpracovaný koncept
+                    {% elif (inv.document_type or 'invoice') == 'quote' %}
+                      Nabídka
+                    {% elif (inv.document_type or 'invoice') == 'credit_note' %}
+                      Dobropis
+                    {% elif (inv.document_type or 'invoice') == 'proforma' %}
+                      Zálohová faktura
+                    {% else %}
+                      Faktura
+                    {% endif %}
+                  </div>
+                </td>
+                <td data-label="Odběratel"><a href="/contacts/{{ inv.contact.id }}">{{ inv.contact.name }}</a></td>
+                <td data-label="Vystaveno">{{ inv.issue_date }}</td>
+                <td data-label="Splatnost">
+                  {{ inv.due_date }}
+                  {% if is_overdue %}
+                    <span class="badge overdue">po splatnosti</span>
+                  {% endif %}
+                </td>
+                <td data-label="Stav">{{ inv.status | invoice_status }}</td>
+                <td data-label="Celkem">{{ inv.total_cents | money(inv.currency) }}</td>
+                <td data-label="Akce">
+                  <div class="invoice-row-actions">
+                    {% if has_row_actions %}
+                      <details class="row-actions-menu">
+                        <summary class="btn small row-actions-trigger">Možnosti</summary>
+                        <div class="row-actions-panel">
+                          {% if can_mark_paid %}
+                            <form method="post" action="/invoices/{{ inv.id }}/status" class="row-paid-form">
+                              {{ csrf_input(request)|safe }}
+                              <input type="hidden" name="status" value="paid" />
+                              <input type="hidden" name="next" value="{{ next_url or '/invoices' }}" />
+                              <label>
+                                <span>Uhrazeno</span>
+                                <input type="date" name="paid_on" value="{{ today }}" />
+                              </label>
+                              <button class="btn small" type="submit">Zaplatit</button>
+                            </form>
+                          {% endif %}
+
+                          {% if can_cancel %}
+                            <form method="post" action="/invoices/{{ inv.id }}/status">
+                              {{ csrf_input(request)|safe }}
+                              <input type="hidden" name="status" value="cancelled" />
+                              <input type="hidden" name="next" value="{{ next_url or '/invoices' }}" />
+                              <button class="btn small" type="submit" onclick="return confirm('Opravdu stornovat tento doklad?')">Stornovat</button>
+                            </form>
+                          {% endif %}
+
+                          {% if can_create_credit_note %}
+                            <form method="post" action="/invoices/{{ inv.id }}/credit-note">
+                              {{ csrf_input(request)|safe }}
+                              <button class="btn small" type="submit" onclick="return confirm('Vytvořit dobropis navázaný na tento doklad?')">Vystavit dobropis</button>
+                            </form>
+                          {% endif %}
+
+                          {% if can_revert %}
+                            <form method="post" action="/invoices/{{ inv.id }}/status">
+                              {{ csrf_input(request)|safe }}
+                              <input type="hidden" name="status" value="{{ revert_status }}" />
+                              <input type="hidden" name="next" value="{{ next_url or '/invoices' }}" />
+                              <button class="btn small" type="submit">{{ revert_label }}</button>
+                            </form>
+                          {% endif %}
+
+                          {% if can_delete %}
+                            <form method="post" action="/invoices/{{ inv.id }}/delete">
+                              {{ csrf_input(request)|safe }}
+                              <button class="btn small" type="submit" onclick="return confirm('Opravdu smazat tento doklad? Tato akce nejde vrátit zpět.')">Smazat doklad</button>
+                            </form>
+                          {% endif %}
+
+                          {% if can_send_reminder %}
+                            <form method="post" action="/invoices/{{ inv.id }}/reminder">
+                              {{ csrf_input(request)|safe }}
+                              <input type="hidden" name="quick" value="1" />
+                              <input type="hidden" name="next" value="{{ next_url or '/invoices' }}" />
+                              <button class="btn small" type="submit" onclick="return confirm('Poslat upomínku?')">Upomínka</button>
+                            </form>
+                          {% endif %}
+                        </div>
+                      </details>
+                    {% else %}
+                      <span class="muted">—</span>
+                    {% endif %}
+                  </div>
+
+                  {% if is_overdue and inv.reminder_sent_at %}
+                    <div class="muted" style="margin-top:0.35rem;">
+                      upomínka: {{ inv.reminder_sent_at }}
+                    </div>
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      {% if pagination and pagination.page_count > 1 %}
+        <nav class="pagination">
+          {% if pagination.prev_url %}
+            <a class="btn" href="{{ pagination.prev_url }}">← Předchozí</a>
+          {% endif %}
+          {% for item in pagination.pages %}
+            {% if item.current %}
+              <span class="btn primary" aria-current="page">{{ item.number }}</span>
+            {% else %}
+              <a class="btn" href="{{ item.url }}">{{ item.number }}</a>
+            {% endif %}
+          {% endfor %}
+          {% if pagination.next_url %}
+            <a class="btn" href="{{ pagination.next_url }}">Další →</a>
+          {% endif %}
+        </nav>
+      {% endif %}
+    {% else %}
+      <div class="empty-state">Zatím žádné faktury.</div>
+    {% endif %}
+  </section>
+{% endblock %}
+
+{% block scripts %}
+  <script>
+    (() => {
+      const closeRowActionMenus = (exceptMenu = null) => {
+        document.querySelectorAll(".row-actions-menu[open]").forEach((menu) => {
+          if (menu !== exceptMenu) {
+            menu.removeAttribute("open");
+            positionRowActionMenu(menu);
+          }
+        });
+      };
+
+      const positionRowActionMenu = (menu) => {
+        const panel = menu.querySelector(".row-actions-panel");
+        const trigger = menu.querySelector(".row-actions-trigger");
+        if (!panel || !trigger) return;
+
+        if (!menu.open) {
+          panel.style.removeProperty("--row-actions-left");
+          panel.style.removeProperty("--row-actions-top");
+          return;
+        }
+
+        const triggerRect = trigger.getBoundingClientRect();
+        const panelWidth = Math.max(panel.offsetWidth || 240, 240);
+        const panelHeight = Math.max(panel.offsetHeight || 0, 0);
+        const spacing = 8;
+        const viewportPadding = 12;
+        const left = Math.min(
+          Math.max(viewportPadding, triggerRect.right - panelWidth),
+          window.innerWidth - panelWidth - viewportPadding
+        );
+        let top = triggerRect.bottom + spacing;
+        if (panelHeight && top + panelHeight > window.innerHeight - viewportPadding) {
+          top = triggerRect.top - panelHeight - spacing;
+        }
+        top = Math.max(viewportPadding, Math.min(top, window.innerHeight - viewportPadding));
+
+        panel.style.setProperty("--row-actions-left", `${left}px`);
+        panel.style.setProperty("--row-actions-top", `${top}px`);
+      };
+
+      document.querySelectorAll(".row-actions-menu").forEach((menu) => {
+        const trigger = menu.querySelector(".row-actions-trigger");
+        if (!trigger) return;
+
+        trigger.addEventListener("click", () => {
+          window.setTimeout(() => {
+            if (menu.open) closeRowActionMenus(menu);
+            positionRowActionMenu(menu);
+          }, 0);
+        });
+      });
+
+      document.addEventListener("click", (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        if (!target.closest(".row-actions-menu")) closeRowActionMenus();
+      });
+
+      window.addEventListener("resize", () => {
+        document.querySelectorAll(".row-actions-menu[open]").forEach(positionRowActionMenu);
+      });
+
+      window.addEventListener("scroll", () => {
+        document.querySelectorAll(".row-actions-menu[open]").forEach(positionRowActionMenu);
+      }, true);
+
+      const form = document.getElementById("bulk-invoices-form");
+      if (!form) return;
+
+      const rowCheckboxes = Array.from(document.querySelectorAll("[data-bulk-checkbox]"));
+      const selectAll = document.getElementById("bulk-select-all");
+      const countNode = document.querySelector("[data-bulk-selected-count]");
+      const submit = document.querySelector("[data-bulk-submit]");
+      const actionSelect = document.getElementById("bulk-action");
+
+      const updateState = () => {
+        const selected = rowCheckboxes.filter((checkbox) => checkbox.checked);
+        const selectedCount = selected.length;
+        if (countNode) countNode.textContent = String(selectedCount);
+        if (submit) submit.disabled = selectedCount === 0 || !actionSelect || !actionSelect.value;
+
+        rowCheckboxes.forEach((checkbox) => {
+          const row = checkbox.closest("[data-bulk-row]");
+          if (!row) return;
+          row.classList.toggle("bulk-row-selected", checkbox.checked);
+        });
+
+        if (selectAll) {
+          selectAll.checked = selectedCount > 0 && selectedCount === rowCheckboxes.length;
+          selectAll.indeterminate = selectedCount > 0 && selectedCount < rowCheckboxes.length;
+        }
+      };
+
+      rowCheckboxes.forEach((checkbox) => checkbox.addEventListener("change", updateState));
+      if (actionSelect) actionSelect.addEventListener("change", updateState);
+
+      if (selectAll) {
+        selectAll.addEventListener("change", () => {
+          rowCheckboxes.forEach((checkbox) => {
+            checkbox.checked = selectAll.checked;
+          });
+          updateState();
+        });
+      }
+
+      updateState();
+    })();
+  </script>
+{% endblock %}

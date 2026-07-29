@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+
+{% block title %}Inicializace účtu – fakturek{% endblock %}
+
+{% block content %}
+  <h1>Inicializace účtu</h1>
+
+  <div class="card">
+    <p>
+      V databázi zatím není žádný uživatel.
+      Vytvoř první účet (typicky <strong>owner</strong>).
+    </p>
+    {% if setup_requires_token %}
+      <p class="muted">
+        Produkční režim vyžaduje <code>SETUP_TOKEN</code>.
+      </p>
+    {% endif %}
+  </div>
+
+  {% if error %}
+    <div class="card">
+      <p><strong>{{ error }}</strong></p>
+    </div>
+  {% endif %}
+
+  <form class="form" method="post" action="/setup">
+    {{ csrf_input(request)|safe }}
+    {% if setup_requires_token %}
+      <div class="form-row">
+        <label for="token">Setup token</label>
+        <input id="token" name="token" value="{{ prefill.token }}" autocomplete="off" />
+      </div>
+    {% endif %}
+
+    <div class="form-row">
+      <label for="username">Uživatelské jméno</label>
+      <input id="username" name="username" value="{{ prefill.username }}" autocomplete="username" autofocus />
+    </div>
+
+    <div class="form-row">
+      <label for="email">E-mail</label>
+      <input id="email" name="email" value="{{ prefill.email }}" autocomplete="email" />
+    </div>
+
+    <div class="form-row">
+      <label for="password">Heslo</label>
+      <input id="password" type="password" name="password" autocomplete="new-password" />
+    </div>
+
+    <div class="form-row">
+      <label for="password2">Heslo (znovu)</label>
+      <input id="password2" type="password" name="password2" autocomplete="new-password" />
+    </div>
+
+    <input type="hidden" name="next" value="{{ next_url }}" />
+
+    <div class="form-actions">
+      <button class="btn primary" type="submit">Vytvořit účet</button>
+      <a class="btn" href="/login">Přihlášení</a>
+    </div>
+  </form>
+{% endblock %}

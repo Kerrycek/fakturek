@@ -1,0 +1,429 @@
+{% extends "base.html" %}
+
+{% block title %}Export/Import – fakturek{% endblock %}
+
+{% block content %}
+  {% set export_prefill = export_prefill or {} %}
+  <section class="stack-lg">
+    <div class="page-header">
+      <div class="page-header-copy">
+        <p class="page-kicker">Export/Import</p>
+        <h1>Export a import dat</h1>
+        <p>Jedno místo pro zálohy, CSV exporty i nahrávání dat z Fakturoidu bez lovení funkcí po celé aplikaci.</p>
+      </div>
+    </div>
+
+    {% if notice %}
+      <p class="notice success">{{ notice }}</p>
+    {% endif %}
+
+    {% if error %}
+      <p class="notice error"><strong>Chyba:</strong> {{ error }}</p>
+    {% endif %}
+
+    <div class="import-export-switch" role="tablist" aria-label="Export nebo import dat">
+      <button class="import-export-switch-button is-active" type="button" role="tab" aria-selected="true" aria-controls="import-export-panel-export" data-import-export-tab="export">
+        <i class="ti ti-file-export" aria-hidden="true"></i>
+        <span>Export</span>
+      </button>
+      <button class="import-export-switch-button" type="button" role="tab" aria-selected="false" aria-controls="import-export-panel-import" data-import-export-tab="import">
+        <i class="ti ti-file-import" aria-hidden="true"></i>
+        <span>Import</span>
+      </button>
+    </div>
+
+    <section class="import-export-layout" data-import-export-tabs>
+      <div class="import-export-panel is-active" id="import-export-panel-export" role="tabpanel" data-import-export-panel="export">
+        <div class="import-export-main card stack-md">
+        <div class="import-export-panel-head">
+          <div class="page-header-copy">
+            <p class="page-kicker">Export</p>
+            <h2>Export faktur na míru</h2>
+            <p>Nastav filtry dokladů, případně omez klienty a zvol výstupní formát.</p>
+          </div>
+        </div>
+
+        <form method="post" action="/exports/invoices" class="form stack-md import-export-form">
+          {{ csrf_input(request)|safe }}
+
+          <div class="import-export-step">
+            <div class="import-export-section">
+              <div>
+                <h3>Filtry dokladů</h3>
+                <p>Prázdná pole znamenají bez omezení.</p>
+              </div>
+            </div>
+
+            <div class="import-export-fields">
+              <div class="field">
+                <label for="export_q">Hledat</label>
+                <input
+                  id="export_q"
+                  name="q"
+                  value="{{ export_prefill.q or '' }}"
+                  placeholder="číslo faktury / klient / IČO"
+                />
+              </div>
+
+              <div class="field">
+                <label for="date_from">Datum od</label>
+                <input id="date_from" name="date_from" type="date" value="{{ export_prefill.date_from or '' }}" />
+              </div>
+
+              <div class="field">
+                <label for="date_to">Datum do</label>
+                <input id="date_to" name="date_to" type="date" value="{{ export_prefill.date_to or '' }}" />
+              </div>
+
+              <div class="field">
+                <label for="status">Stav</label>
+                <select id="status" name="status">
+                  {% for value, label in (invoice_status_options or []) %}
+                    <option value="{{ value }}" {% if (export_prefill.status or '') == value %}selected{% endif %}>{{ label }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+
+              <div class="field">
+                <label for="document_type">Typ dokladu</label>
+                <select id="document_type" name="document_type">
+                  <option value="" {% if not export_prefill.document_type %}selected{% endif %}>Všechny typy</option>
+                  {% for value, label in (invoice_document_type_options or []) %}
+                    <option value="{{ value }}" {% if (export_prefill.document_type or '') == value %}selected{% endif %}>{{ label }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+
+              <div class="field checkbox">
+                <label class="checkbox-inline import-export-checkbox">
+                  <input type="checkbox" name="overdue" value="1" {% if export_prefill.overdue %}checked{% endif %} />
+                  Jen po splatnosti
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div class="import-export-step">
+            <div class="import-export-section">
+              <div>
+                <h3>Klienti</h3>
+                <p>Bez výběru se exportují všichni klienti.</p>
+              </div>
+              <div class="muted export-contact-summary" data-export-contact-summary>
+                {% set selected_contacts = (export_prefill.contact_ids or []) %}
+                {% if selected_contacts %}
+                  <small>Vybráno {{ selected_contacts|length }} klient{% if selected_contacts|length == 1 %}a{% elif selected_contacts|length < 5 %}i{% else %}ů{% endif %}.</small>
+                {% else %}
+                  <small>Všichni klienti.</small>
+                {% endif %}
+              </div>
+            </div>
+
+            <div class="form-row import-export-client-block">
+              <div class="export-contact-picker">
+                <input
+                  id="export_contact_filter"
+                  type="search"
+                  autocomplete="off"
+                  placeholder="Začni psát název klienta, IČO nebo e-mail"
+                  data-export-contact-filter
+                />
+                <div class="export-contact-list" data-export-contact-list>
+                  {% for c in (export_contact_options or []) %}
+                    {% set searchable = ((c.name or '') ~ ' ' ~ (c.ico or '') ~ ' ' ~ (c.email or ''))|lower %}
+                    <label class="export-contact-item" data-export-contact-item data-export-contact-search="{{ searchable }}">
+                      <span class="checkbox-inline">
+                        <input
+                          type="checkbox"
+                          name="contact_ids"
+                          value="{{ c.id }}"
+                          {% if c.id in (export_prefill.contact_ids or []) %}checked{% endif %}
+                          data-export-contact-checkbox
+                        />
+                        <span class="export-contact-copy">
+                          <strong>{{ c.name }}</strong>
+                          <small>
+                            {% if c.ico %}IČO {{ c.ico }}{% endif %}
+                            {% if c.email %}{% if c.ico %} • {% endif %}{{ c.email }}{% endif %}
+                            {% if not c.ico and not c.email %}Bez doplňujících údajů{% endif %}
+                          </small>
+                        </span>
+                      </span>
+                    </label>
+                  {% endfor %}
+                  <div class="export-contact-empty" data-export-contact-empty hidden>
+                    Žádný klient neodpovídá zadanému hledání.
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="import-export-step">
+            <div class="import-export-section">
+              <div>
+                <h3>Výstup</h3>
+                <p>Vyber formát exportu.</p>
+              </div>
+            </div>
+
+            <div class="import-export-output-row">
+              <div class="form-row">
+                <label for="format">Formát</label>
+                <select id="format" name="format">
+                  {% for value, label in (export_format_options or []) %}
+                    <option value="{{ value }}" {% if (export_prefill.format or 'csv') == value %}selected{% endif %}>{{ label }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="import-export-help">
+                <strong>Doporučení</strong>
+                <span>CSV pro účetní přehled, PDF ZIP pro archiv nebo předání dokladů.</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-actions">
+            <button class="btn primary" type="submit">Exportovat faktury</button>
+          </div>
+        </form>
+        </div>
+
+        <div class="card stack-md import-export-quick-card">
+          <div class="page-header-copy">
+            <p class="page-kicker">Rychlé exporty</p>
+            <h2>Záloha a přenos dat</h2>
+            <p>Hotové zkratky bez nastavování filtrů.</p>
+          </div>
+
+          {% if can_export|default(false) %}
+            <div class="import-export-action-list">
+              <a class="import-export-action" href="/contacts/export.csv">
+                <span class="import-export-action-icon"><i class="ti ti-address-book" aria-hidden="true"></i></span>
+                <span>
+                  <strong>Kontakty CSV</strong>
+                  <small>Klienti a kontaktní údaje.</small>
+                </span>
+              </a>
+              <a class="import-export-action" href="/invoices/export.csv">
+                <span class="import-export-action-icon"><i class="ti ti-file-spreadsheet" aria-hidden="true"></i></span>
+                <span>
+                  <strong>Faktury CSV</strong>
+                  <small>Rychlý přehled faktur.</small>
+                </span>
+              </a>
+              <a class="import-export-action" href="/exports/data.zip">
+                <span class="import-export-action-icon"><i class="ti ti-package-export" aria-hidden="true"></i></span>
+                <span>
+                  <strong>Kompletní ZIP</strong>
+                  <small>Data, položky, účty, audity a logy.</small>
+                </span>
+              </a>
+            </div>
+          {% else %}
+            <p class="muted">Exporty jsou dostupné jen uživatelům s oprávněním Exportovat.</p>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="import-export-panel" id="import-export-panel-import" role="tabpanel" data-import-export-panel="import" hidden>
+        <div class="card stack-md import-export-import-card">
+          <div class="page-header-copy">
+            <p class="page-kicker">Import</p>
+            <h2>Import centrum</h2>
+            <p class="muted">Vyber typ souboru, nahraj ho a import potom zkontroluj v historii.</p>
+          </div>
+
+          <form method="post" action="/imports" enctype="multipart/form-data" class="form stack-md">
+            {{ csrf_input(request)|safe }}
+
+            {% set selected_source = (prefill.source if prefill and prefill.source else 'fakturoid') %}
+            <div class="stack-sm">
+              <label>Co chceš nahrát</label>
+              <div class="import-source-list">
+                {% for source in (import_source_options or []) %}
+                  <label class="import-source-option">
+                    <input
+                      type="radio"
+                      name="source"
+                      value="{{ source.value }}"
+                      data-accept="{{ source.accept }}"
+                      {% if selected_source == source.value %}checked{% endif %}
+                    />
+                    <span>
+                      <strong>{{ source.label }}</strong>
+                      <small>{{ source.description }}</small>
+                    </span>
+                  </label>
+                {% endfor %}
+              </div>
+            </div>
+
+            <div class="import-export-supported">
+              <strong>Podporované soubory</strong>
+              <span>Fakturoid, CSV kontaktů, XML/ISDOC faktury, PDF/ZIP, POHODA XML a Money S3 XML.</span>
+            </div>
+
+            <div class="form-row import-file-field">
+              <label for="file">Soubor</label>
+              <input id="file" type="file" name="file" required accept=".xml,.isdoc,.csv,.zip,.pdf,application/xml,text/csv,application/zip,application/pdf" />
+              {% if max_upload_mb %}
+                <div class="muted"><small>XML, ISDOC, PDF, CSV nebo ZIP. Max {{ max_upload_mb }} MB.</small></div>
+              {% else %}
+                <div class="muted"><small>XML, ISDOC, PDF, CSV nebo ZIP.</small></div>
+              {% endif %}
+            </div>
+
+            <div class="form-actions">
+              <button class="btn primary" type="submit">Nahrát soubor</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="card stack-md import-history-card">
+          <div class="page-header-copy">
+            <p class="page-kicker">Historie</p>
+            <h2>Poslední importy</h2>
+            <p>Přehled toho, co už proběhlo, co čeká na zpracování a kam se vrátit pro detail běhu.</p>
+          </div>
+
+          {% if runs %}
+            <div class="table-wrap">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Zdroj</th>
+                    <th>Stav</th>
+                    <th>Soubor</th>
+                    <th>Začátek</th>
+                    <th>Konec</th>
+                    <th>Akce</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for r in runs %}
+                    <tr>
+                      <td><a href="/imports/{{ r.id }}">#{{ r.id }}</a></td>
+                      <td>{{ r.source }}</td>
+                      <td>{{ r.status }}</td>
+                      <td>
+                        {% if r.file_name %}
+                          {{ r.file_name }}
+                          {% if r.file_size_bytes %}
+                            <span class="muted"><small>({{ r.file_size_bytes }} B)</small></span>
+                          {% endif %}
+                        {% else %}
+                          <span class="muted">—</span>
+                        {% endif %}
+                      </td>
+                      <td>{{ r.started_at }}</td>
+                      <td>{{ r.finished_at or '—' }}</td>
+                      <td>
+                        <div class="settings-table-actions">
+                          <a class="btn small" href="/imports/{{ r.id }}">Detail</a>
+                          {% if r.status in ['uploaded', 'error'] %}
+                            <form method="post" action="/imports/{{ r.id }}/process" style="margin:0;">
+                              {{ csrf_input(request)|safe }}
+                              <button class="btn small" type="submit">Spustit</button>
+                            </form>
+                          {% endif %}
+                        </div>
+                      </td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <div class="empty-state">Zatím žádné importy.</div>
+          {% endif %}
+        </div>
+      </div>
+
+        <script>
+          (() => {
+            const tabsRoot = document.querySelector('[data-import-export-tabs]');
+            const tabs = Array.from(document.querySelectorAll('[data-import-export-tab]'));
+            const panels = Array.from(document.querySelectorAll('[data-import-export-panel]'));
+            if (!tabsRoot || !tabs.length || !panels.length) return;
+
+            const setMode = (mode, updateHash = false) => {
+              const activeMode = mode === 'import' ? 'import' : 'export';
+              tabs.forEach((tab) => {
+                const isActive = tab.dataset.importExportTab === activeMode;
+                tab.classList.toggle('is-active', isActive);
+                tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
+              });
+              panels.forEach((panel) => {
+                const isActive = panel.dataset.importExportPanel === activeMode;
+                panel.classList.toggle('is-active', isActive);
+                panel.hidden = !isActive;
+              });
+              if (updateHash) {
+                history.replaceState(null, '', activeMode === 'import' ? '#import' : '#export');
+              }
+            };
+
+            tabs.forEach((tab) => {
+              tab.addEventListener('click', () => setMode(tab.dataset.importExportTab, true));
+            });
+            setMode(window.location.hash === '#import' ? 'import' : 'export');
+          })();
+
+          (() => {
+            const fileInput = document.getElementById('file');
+            if (!fileInput) return;
+            const radios = Array.from(document.querySelectorAll('input[name="source"][data-accept]'));
+            const syncAccept = () => {
+              const active = radios.find((radio) => radio.checked);
+              if (active && active.dataset.accept) {
+                fileInput.setAttribute('accept', active.dataset.accept);
+              }
+            };
+            radios.forEach((radio) => radio.addEventListener('change', syncAccept));
+            syncAccept();
+          })();
+
+          (() => {
+            const filterInput = document.querySelector('[data-export-contact-filter]');
+            const items = Array.from(document.querySelectorAll('[data-export-contact-item]'));
+            const summary = document.querySelector('[data-export-contact-summary]');
+            const checkboxes = Array.from(document.querySelectorAll('[data-export-contact-checkbox]'));
+            const empty = document.querySelector('[data-export-contact-empty]');
+            if (!filterInput || !items.length || !summary) return;
+
+            const renderSummary = () => {
+              const count = checkboxes.filter((checkbox) => checkbox.checked).length;
+              if (count === 0) {
+                summary.innerHTML = '<small>Není vybraný žádný klient, takže se vezmou všichni.</small>';
+                return;
+              }
+              const suffix = count === 1 ? 'a' : (count < 5 ? 'i' : 'ů');
+              summary.innerHTML = `<small>Vybráno ${count} klient${suffix}.</small>`;
+            };
+
+            const applyFilter = () => {
+              const needle = (filterInput.value || '').trim().toLowerCase();
+              let visibleCount = 0;
+              items.forEach((item) => {
+                const haystack = (item.getAttribute('data-export-contact-search') || '').toLowerCase();
+                const isMatch = needle ? haystack.includes(needle) : true;
+                item.classList.toggle('is-filtered-out', !isMatch);
+                item.setAttribute('aria-hidden', isMatch ? 'false' : 'true');
+                if (isMatch) visibleCount += 1;
+              });
+              if (empty) {
+                empty.hidden = visibleCount !== 0;
+              }
+            };
+
+            filterInput.addEventListener('input', applyFilter);
+            checkboxes.forEach((checkbox) => checkbox.addEventListener('change', renderSummary));
+            renderSummary();
+            applyFilter();
+          })();
+        </script>
+    </section>
+  </section>
+{% endblock %}

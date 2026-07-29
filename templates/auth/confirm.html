@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }} – fakturek{% endblock %}
+
+{% block content %}
+  <section class="card" style="max-width: 36rem; margin: 0 auto;">
+    <h1>{{ title }}</h1>
+    <p>{{ message }}</p>
+    <form method="post" action="{{ action_url }}" style="display:flex; gap:0.75rem; flex-wrap:wrap; margin-top:1rem;">
+      {{ csrf_input(request)|safe }}
+      {% for key, value in hidden_fields.items() %}
+        <input type="hidden" name="{{ key }}" value="{{ value }}" />
+      {% endfor %}
+      <button type="submit" class="btn primary">{{ submit_label }}</button>
+      <a class="btn subtle" href="{{ cancel_url }}">Zpět</a>
+    </form>
+  </section>
+{% endblock %}

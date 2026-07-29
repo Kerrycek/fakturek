@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+
+{% block title %}Upravit automatickou fakturu – fakturek{% endblock %}
+
+{% block content %}
+  <section class="stack-lg">
+    <div class="page-header">
+      <div class="page-header-copy">
+        <p class="page-kicker">Opakování</p>
+        <h1>Upravit automatickou fakturu</h1>
+        <p>Na jedné stránce upravíš plán vystavování i šablonu dokladu, ze které se automatické faktury generují.</p>
+      </div>
+      <div class="page-header-actions">
+        <a class="btn" href="/recurring">Zpět na automatické faktury</a>
+      </div>
+    </div>
+
+    {% if plan_notice %}
+      <p class="notice success">{{ plan_notice }}</p>
+    {% endif %}
+
+    {% if plan_error %}
+      <p class="notice error"><strong>Chyba:</strong> {{ plan_error }}</p>
+    {% endif %}
+
+    <div class="recurring-edit-grid">
+      <form method="post" action="/recurring/{{ plan.id }}/edit" class="card stack-md recurring-edit-form">
+        {{ csrf_input(request)|safe }}
+        <div class="settings-card-head">
+          <div>
+            <p class="dashboard-eyebrow">Plán</p>
+            <h3>Kdy a jak vystavovat</h3>
+          </div>
+          <span class="badge {% if plan.is_active %}success{% endif %}">{% if plan.is_active %}aktivní{% else %}pozastavené{% endif %}</span>
+        </div>
+
+        <div class="form-grid">
+          <div class="form-field">
+            <label for="recurring_name">Název opakování</label>
+            <input id="recurring_name" name="name" value="{{ plan.name }}" />
+          </div>
+          <div class="form-field">
+            <label for="recurring_next_issue_date">Další vystavení</label>
+            <input id="recurring_next_issue_date" type="date" name="next_issue_date" value="{{ plan.next_issue_date }}" />
+          </div>
+          <div class="form-field">
+            <label for="recurring_interval_unit">Opakovat</label>
+            <select id="recurring_interval_unit" name="interval_unit">
+              {% for value, label in recurring_interval_options %}
+                <option value="{{ value }}" {% if plan.interval_unit == value %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-field">
+            <label for="recurring_interval_count">Každý kolikátý interval</label>
+            <input id="recurring_interval_count" name="interval_count" type="number" min="1" value="{{ plan.interval_count or 1 }}" />
+          </div>
+          <div class="form-field">
+            <label for="recurring_due_in_days">Splatnost za dní</label>
+            <input id="recurring_due_in_days" name="due_in_days" type="number" min="0" value="{{ plan.due_in_days or 14 }}" />
+          </div>
+          <div class="form-field">
+            <label for="recurring_email_override">E-mail pro auto-posílání</label>
+            <input id="recurring_email_override" name="email_override" value="{{ plan.email_override or '' }}" placeholder="nechat prázdné = e-mail kontaktu" />
+          </div>
+        </div>
+
+        <div class="toolbar recurring-edit-checks">
+          <label class="checkbox" style="display:flex; align-items:center; gap:0.5rem;">
+            <input type="checkbox" name="is_active" value="1" {% if plan.is_active %}checked{% endif %} />
+            <span>Opakování je aktivní</span>
+          </label>
+          <label class="checkbox" style="display:flex; align-items:center; gap:0.5rem;">
+            <input type="checkbox" name="auto_issue" value="1" {% if plan.auto_issue %}checked{% endif %} />
+            <span>V den běhu vystavit jako ostrý doklad</span>
+          </label>
+          <label class="checkbox" style="display:flex; align-items:center; gap:0.5rem;">
+            <input type="checkbox" name="auto_send" value="1" {% if plan.auto_send %}checked{% endif %} />
+            <span>Po vystavení rovnou poslat e-mailem</span>
+          </label>
+        </div>
+        <p class="muted">Když vystavení vypneš, automatika v daný den založí jen koncept. Neznamená to vystavit hned při uložení plánu.</p>
+
+        <div class="form-actions">
+          <button class="btn primary" type="submit">Uložit změny</button>
+          <a class="btn" href="/recurring">Zrušit</a>
+        </div>
+      </form>
+
+      <aside class="card stack-sm recurring-token-help">
+        <div>
+          <p class="dashboard-eyebrow">Proměnné</p>
+          <h3>Texty v šabloně</h3>
+          <p class="muted">Proměnné fungují v položkách, poznámce a patičce šablony. Posun bez jednotky znamená posun o měsíce.</p>
+        </div>
+        <div class="recurring-token-list">
+          <code>{% raw %}{{month_name}}{% endraw %}</code><span>červen</span>
+          <code>{% raw %}{{month_name+1}}{% endraw %}</code><span>další měsíc</span>
+          <code>{% raw %}{{month++}}{% endraw %}</code><span>číslo dalšího měsíce</span>
+          <code>{% raw %}{{period_label-1}}{% endraw %}</code><span>předchozí měsíc a rok</span>
+          <code>{% raw %}{{month_start+1}}{% endraw %}</code><span>první den dalšího měsíce</span>
+          <code>{% raw %}{{month_end+1}}{% endraw %}</code><span>poslední den dalšího měsíce</span>
+          <code>{% raw %}{{issue_date+14d}}{% endraw %}</code><span>datum vystavení + 14 dní</span>
+        </div>
+      </aside>
+    </div>
+
+    {% if invoice %}
+      {% include "invoices/_editor.html" %}
+    {% else %}
+      <section class="card stack-sm">
+        <p class="dashboard-eyebrow">Šablona</p>
+        <h3>Šablona automatické faktury chybí</h3>
+        <p class="muted">Tohle opakování nemá připojenou fakturu, ze které by šlo generovat další doklady.</p>
+      </section>
+    {% endif %}
+  </section>
+{% endblock %}

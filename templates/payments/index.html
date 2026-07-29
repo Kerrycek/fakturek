@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-head">
+  <p class="dashboard-eyebrow">Platby</p>
+  <h1>Banky a párování plateb</h1>
+  <p class="muted">Rychlý přehled synchronizace účtů a plateb, které ještě čekají na spárování.</p>
+</section>
+
+<section class="payments-health-grid">
+  {% for account in account_rows %}
+    <article class="card payment-health-card">
+      <div class="payment-health-head">
+        <div>
+          <p class="dashboard-eyebrow">{{ account.provider }}</p>
+          <h2>{{ account.label }}</h2>
+          <p class="muted payment-account-display">{{ account.display }} · {{ account.currency }}</p>
+        </div>
+        <span class="status-chip status-chip-{{ account.health_class }}">{{ account.health }}</span>
+      </div>
+      <dl class="payment-health-meta">
+        <div>
+          <dt>Poslední kontrola</dt>
+          <dd>{{ account.last_checked or '—' }}</dd>
+        </div>
+        <div>
+          <dt>Poslední úspěch</dt>
+          <dd>{{ account.last_success or '—' }}</dd>
+        </div>
+      </dl>
+      {% if account.last_error %}
+        <p class="muted payment-error">{{ account.last_error }}</p>
+      {% endif %}
+      <div class="form-actions compact-actions">
+        <form method="post" action="/settings/accounts/{{ account.id }}/sync">
+          {{ csrf_input(request)|safe }}
+          <button class="btn small" type="submit">Zkontrolovat teď</button>
+        </form>
+        <a class="btn small" href="/settings?edit_account={{ account.id }}#account-{{ account.id }}">Nastavení</a>
+      </div>
+    </article>
+  {% else %}
+    <div class="card empty-state"><p>Zatím tu není žádný bankovní účet.</p></div>
+  {% endfor %}
+</section>
+
+<section class="card payments-posted-card" id="posted-payments">
+  <div class="settings-card-head">
+    <div>
+      <p class="dashboard-eyebrow">Zaúčtované</p>
+      <h2>Spárované a ručně zadané platby</h2>
+    </div>
+    {% if paid_pagination %}
+      <span class="muted">
+        {{ paid_pagination.from_item }}–{{ paid_pagination.to_item }} z {{ paid_pagination.total_count }}
+      </span>
+    {% endif %}
+  </div>
+
+  {% if paid_payment_rows %}
+    <div class="table-wrap payments-posted-table-wrap">
+      <table class="table payments-posted-table">
+        <thead>
+          <tr>
+            <th>Uhrazeno</th>
+            <th>Částka</th>
+            <th>Faktura</th>
+            <th>Odběratel</th>
+            <th>Poznámka</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for payment in paid_payment_rows %}
+            <tr>
+              <td>{{ payment.paid_on }}</td>
+              <td><strong>{{ payment.amount }}</strong></td>
+              <td>
+                <a href="/invoices/{{ payment.invoice_id }}">{{ payment.invoice_number }}</a>
+                {% if payment.invoice_status %}
+                  <span class="muted">· {{ payment.invoice_status | invoice_status }}</span>
+                {% endif %}
+              </td>
+              <td>{{ payment.contact or 'Bez kontaktu' }}</td>
+              <td class="muted payment-note-cell">{{ payment.note or '—' }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% if paid_pagination and paid_pagination.page_count > 1 %}
+      <nav class="pagination payments-pagination">
+        {% if paid_pagination.prev_url %}
+          <a class="btn" href="{{ paid_pagination.prev_url }}#posted-payments">← Předchozí</a>
+        {% endif %}
+        {% for item in paid_pagination.pages %}
+          {% if item.current %}
+            <span class="btn primary" aria-current="page">{{ item.number }}</span>
+          {% else %}
+            <a class="btn" href="{{ item.url }}#posted-payments">{{ item.number }}</a>
+          {% endif %}
+        {% endfor %}
+        {% if paid_pagination.next_url %}
+          <a class="btn" href="{{ paid_pagination.next_url }}#posted-payments">Další →</a>
+        {% endif %}
+      </nav>
+    {% endif %}
+  {% else %}
+    <p class="muted">Zatím tu není žádná zaúčtovaná platba.</p>
+  {% endif %}
+</section>
+
+<section class="card payments-unmatched-card" id="unmatched-payments">
+  <div class="settings-card-head">
+    <div>
+      <p class="dashboard-eyebrow">Nespárované</p>
+      <h2>Příchozí platby bez faktury</h2>
+      <p class="muted">Tady jsou importované příchozí transakce, které ještě nejsou navázané na fakturu. Spárovat jde jen kandidáty se stejnou částkou a měnou.</p>
+    </div>
+    {% if unmatched_pagination %}
+      <span class="muted">
+        {{ unmatched_pagination.from_item }}–{{ unmatched_pagination.to_item }} z {{ unmatched_pagination.total_count }}
+      </span>
+    {% endif %}
+  </div>
+
+  <div class="payments-list">
+    {% for tx in transaction_rows %}
+      <article class="payment-row">
+        <div>
+          <strong>{{ tx.amount }}</strong>
+          <p class="muted">{{ tx.booked_on }} · {{ tx.account_label or 'Bankovní účet' }}</p>
+          {% if tx.counterparty %}<p>{{ tx.counterparty }}</p>{% endif %}
+          {% if tx.variable_symbol %}<p class="muted">VS {{ tx.variable_symbol }}</p>{% endif %}
+          {% if tx.message %}<p class="muted payment-message">{{ tx.message }}</p>{% endif %}
+        </div>
+        <div class="payment-candidates">
+          {% if tx.candidates %}
+            {% for candidate in tx.candidates %}
+              <form method="post" action="/payments/transactions/{{ tx.id }}/match" class="payment-candidate-form">
+                {{ csrf_input(request)|safe }}
+                <input type="hidden" name="invoice_id" value="{{ candidate.id }}" />
+                <input type="hidden" name="next" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}#unmatched-payments" />
+                <a class="payment-candidate" href="/invoices/{{ candidate.id }}">
+                  <strong>{{ candidate.number }}</strong>
+                  <span>{{ candidate.contact or 'Bez kontaktu' }}</span>
+                  <span>{{ candidate.total }}{% if candidate.status %} · {{ candidate.status | invoice_status }}{% endif %}</span>
+                </a>
+                <button class="btn small" type="submit">Spárovat</button>
+              </form>
+            {% endfor %}
+          {% else %}
+            <span class="muted">Bez jasného kandidáta</span>
+          {% endif %}
+        </div>
+      </article>
+    {% else %}
+      <p class="muted">Žádná nespárovaná příchozí platba. Takhle to má vypadat.</p>
+    {% endfor %}
+  </div>
+
+  {% if unmatched_pagination and unmatched_pagination.page_count > 1 %}
+    <nav class="pagination payments-pagination">
+      {% if unmatched_pagination.prev_url %}
+        <a class="btn" href="{{ unmatched_pagination.prev_url }}#unmatched-payments">← Předchozí</a>
+      {% endif %}
+      {% for item in unmatched_pagination.pages %}
+        {% if item.current %}
+          <span class="btn primary" aria-current="page">{{ item.number }}</span>
+        {% else %}
+          <a class="btn" href="{{ item.url }}#unmatched-payments">{{ item.number }}</a>
+        {% endif %}
+      {% endfor %}
+      {% if unmatched_pagination.next_url %}
+        <a class="btn" href="{{ unmatched_pagination.next_url }}#unmatched-payments">Další →</a>
+      {% endif %}
+    </nav>
+  {% endif %}
+</section>
+{% endblock %}

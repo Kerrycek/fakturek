@@ -1,0 +1,2365 @@
+<!doctype html>
+<html lang="{{ invoice_language or 'cs' }}" {% if public_mode and not pdf_mode %}data-public-invoice-theme="light"{% endif %}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ document_label or invoice_i18n.document or 'Doklad' }} {{ invoice.number }} – {{ invoice_i18n.print_suffix or 'tisk' }}</title>
+    {% if pdf_mode %}
+      <style>
+        {{ app_css | safe }}
+      </style>
+    {% else %}
+      <link rel="stylesheet" href="/static/app.css" />
+      {% if public_mode %}
+        <link rel="stylesheet" href="/static/vendor/tabler/icons/tabler-icons.min.css?v=3.44.0" />
+      {% endif %}
+    {% endif %}
+    {% if public_mode and not pdf_mode %}
+      <script>
+        (function () {
+          try {
+            var storedTheme = window.localStorage.getItem('fakturek-public-invoice-theme');
+            var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+            var theme = storedTheme === 'dark' || storedTheme === 'light' ? storedTheme : (prefersDark ? 'dark' : 'light');
+            document.documentElement.setAttribute('data-public-invoice-theme', theme);
+          } catch (error) {
+            document.documentElement.setAttribute('data-public-invoice-theme', 'light');
+          }
+        })();
+      </script>
+    {% endif %}
+    {% if not public_mode and not pdf_mode %}
+      <script>
+        window.addEventListener("pageshow", function (event) {
+          if (event.persisted) {
+            window.location.reload();
+          }
+        });
+      </script>
+    {% endif %}
+    <style>
+      @page { size: A4; margin: 9mm 8mm; }
+
+      :root {
+        --page-bg: #f5f7fb;
+        --paper-bg: #ffffff;
+        --line: #dadfe5;
+        --line-strong: #c6ccd3;
+        --muted: #667382;
+        --text: #182433;
+        --heading: #182433;
+        --accent: #206bc4;
+        --accent-strong: #1d60b0;
+        --accent-soft: rgba(32, 107, 196, 0.10);
+        --success: #2fb344;
+        --success-soft: rgba(47, 179, 68, 0.12);
+        --danger: #b42318;
+        --danger-soft: #fef3f2;
+        --surface: #f8fafc;
+        --shadow: 0 1px 2px rgba(24, 36, 51, 0.04);
+        --radius-lg: 4px;
+        --radius-md: 4px;
+        --radius-sm: 4px;
+      }
+
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; }
+      body {
+        background: var(--page-bg);
+        color: var(--text);
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        line-height: 1.45;
+      }
+      body.pdf-mode {
+        background: #fff;
+      }
+      body.invoice-style-classic {
+        --page-bg: #f2efe8;
+        --paper-bg: #fffefb;
+        --line: #d9d1c5;
+        --line-strong: #beb5a7;
+        --muted: #6f675c;
+        --text: #211f1a;
+        --heading: #171513;
+        --accent: #315f8b;
+        --accent-soft: #eef4fa;
+        --surface: #fbf8f2;
+        --shadow: 0 16px 32px rgba(35, 27, 15, 0.08);
+        --radius-lg: 12px;
+        --radius-md: 8px;
+        --radius-sm: 6px;
+        font-family: "IBM Plex Sans", "Aptos", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+      }
+      body.invoice-style-classic .toolbar {
+        border-radius: 10px;
+        background: rgba(255, 254, 251, 0.94);
+        border-color: rgba(49, 95, 139, 0.18);
+      }
+      body.invoice-style-classic .invoice-paper,
+      body.invoice-style-classic .summary-card,
+      body.invoice-style-classic .party-card,
+      body.invoice-style-classic .meta-card,
+      body.invoice-style-classic .payment-card,
+      body.invoice-style-classic .totals-card,
+      body.invoice-style-classic .note-card,
+      body.invoice-style-classic .qr-card,
+      body.invoice-style-classic .pdf-block,
+      body.invoice-style-classic .pdf-qr {
+        border-radius: 8px;
+      }
+      body.invoice-style-classic .summary-card,
+      body.invoice-style-classic .payment-card,
+      body.invoice-style-classic .party-card,
+      body.invoice-style-classic .meta-card,
+      body.invoice-style-classic .totals-card,
+      body.invoice-style-classic .note-card {
+        background: #fffefb;
+      }
+      body.invoice-style-classic .items-table th,
+      body.invoice-style-classic .pdf-items-table th {
+        background: #f4efe7;
+        color: #60584b;
+      }
+      body.invoice-style-classic .pdf-doc-title,
+      body.invoice-style-classic .invoice-title {
+        letter-spacing: 0.02em;
+      }
+      body.invoice-style-classic .pdf-totals {
+        border-top-color: #6f7f91;
+      }
+      body.invoice-style-minimal {
+        --page-bg: #f7f7f7;
+        --paper-bg: #ffffff;
+        --line: #e5e7eb;
+        --line-strong: #d1d5db;
+        --muted: #6b7280;
+        --text: #111111;
+        --heading: #0b0b0b;
+        --accent: #111111;
+        --accent-soft: #f3f4f6;
+        --surface: #fafafa;
+        --shadow: 0 8px 18px rgba(15, 23, 42, 0.05);
+        --radius-lg: 10px;
+        --radius-md: 8px;
+        --radius-sm: 6px;
+      }
+      body.invoice-style-minimal .toolbar {
+        backdrop-filter: none;
+        background: #fff;
+      }
+      body.invoice-style-minimal .summary-card,
+      body.invoice-style-minimal .party-card,
+      body.invoice-style-minimal .meta-card,
+      body.invoice-style-minimal .payment-card,
+      body.invoice-style-minimal .totals-card,
+      body.invoice-style-minimal .note-card,
+      body.invoice-style-minimal .pdf-block {
+        background: #fff;
+      }
+      body.invoice-style-minimal .summary-status {
+        background: #f3f4f6;
+        color: #111111;
+      }
+      body.invoice-style-minimal .summary-status.cancelled {
+        background: #fef2f2;
+        color: #991b1b;
+      }
+      body.invoice-style-minimal .invoice-paper {
+        box-shadow: none;
+      }
+      body.invoice-style-minimal .items-table th,
+      body.invoice-style-minimal .pdf-items-table th {
+        background: #fff;
+      }
+      body.invoice-style-minimal .pdf-totals {
+        border-top-width: 1px;
+        border-top-color: #111111;
+      }
+      a { color: inherit; text-decoration: none; }
+
+      .screen-only { display: block; }
+      .print-shell {
+        max-width: 1320px;
+        margin: 0 auto;
+        padding: 0 1rem 2rem;
+      }
+      body.pdf-mode .print-shell {
+        max-width: none;
+        margin: 0;
+        padding: 0;
+      }
+      body.pdf-mode .invoice-paper {
+        padding: 0;
+      }
+
+      .toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        min-height: 4rem;
+        margin: 0 -1rem 1.5rem;
+        padding: 0.75rem 1rem;
+        border: 0;
+        border-bottom: 1px solid var(--line);
+        border-radius: 0;
+        background: var(--paper-bg);
+      }
+      .toolbar-title {
+        min-width: 0;
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: .75rem;
+        align-items: center;
+      }
+      .toolbar-title::before {
+        content: "F";
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 2rem;
+        height: 2rem;
+        border-radius: var(--radius-md);
+        background: var(--accent);
+        color: #fff;
+        font-weight: 800;
+      }
+      .toolbar-title strong {
+        display: block;
+        font-size: 1.05rem;
+        color: var(--heading);
+      }
+      .toolbar-title span {
+        display: block;
+        grid-column: 2;
+        font-size: 0.9rem;
+        color: var(--muted);
+      }
+      .toolbar-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        justify-content: flex-end;
+      }
+      .toolbar-actions .btn,
+      .toolbar-actions button.btn {
+        border-color: var(--line-strong);
+        background: #fff;
+        color: var(--heading);
+        min-height: 2.25rem;
+        border-radius: var(--radius-md);
+        box-shadow: none;
+        font-weight: 500;
+      }
+      .toolbar-actions .btn.primary,
+      .toolbar-actions button.btn.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+
+      .invoice-paper {
+        background: var(--paper-bg);
+        border: 1px solid var(--line);
+        border-radius: var(--radius-lg);
+        box-shadow: var(--shadow);
+        padding: 1rem;
+      }
+      .cancelled-banner {
+        margin: 0 0 14px;
+        padding: 11px 14px;
+        border: 2px solid rgba(180, 35, 24, 0.28);
+        border-radius: var(--radius-md);
+        background: linear-gradient(180deg, #fff5f4 0%, var(--danger-soft) 100%);
+        color: var(--danger);
+      }
+      .cancelled-banner strong {
+        display: block;
+        font-size: 1rem;
+        font-weight: 900;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .cancelled-banner span {
+        display: block;
+        margin-top: 4px;
+        font-size: 0.84rem;
+        color: #7a271a;
+      }
+      body.pdf-mode .invoice-paper {
+        border: none;
+        border-radius: 0;
+        box-shadow: none;
+        padding: 0;
+      }
+
+      .invoice-header {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 300px;
+        gap: 1rem;
+        align-items: start;
+        margin-bottom: 1rem;
+      }
+      .invoice-kicker {
+        margin-bottom: 8px;
+        font-size: 0.78rem;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .invoice-title {
+        margin: 0;
+        font-size: 1.75rem;
+        line-height: 1.15;
+        color: var(--heading);
+      }
+      .invoice-subtitle {
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 0.92rem;
+      }
+
+      .summary-card,
+      .meta-card,
+      .payment-card,
+      .party-card,
+      .totals-card,
+      .note-card,
+      .qr-card {
+        border: 1px solid var(--line);
+        border-radius: var(--radius-md);
+        background: #fff;
+      }
+
+      .summary-card {
+        padding: 1rem;
+        background: var(--surface);
+      }
+      .summary-label {
+        font-size: 0.8rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .summary-amount {
+        margin-top: 8px;
+        font-size: 1.65rem;
+        line-height: 1.08;
+        font-weight: 800;
+        color: var(--heading);
+      }
+      .summary-status {
+        display: inline-flex;
+        align-items: center;
+        margin-top: 10px;
+        padding: 4px 9px;
+        border-radius: 999px;
+        background: var(--success-soft);
+        color: var(--success);
+        font-size: 0.78rem;
+        font-weight: 700;
+      }
+      .summary-status.cancelled {
+        background: var(--danger-soft);
+        color: var(--danger);
+      }
+      .summary-meta {
+        margin: 10px 0 0;
+        display: grid;
+        gap: 6px;
+      }
+      .summary-vs {
+        margin-top: 10px;
+        padding: 8px 10px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.86);
+      }
+      .summary-vs-label {
+        font-size: 0.72rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .summary-vs-value {
+        margin-top: 4px;
+        font-size: 1rem;
+        font-weight: 800;
+        color: var(--heading);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      }
+      .summary-meta-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        font-size: 0.86rem;
+      }
+      .summary-meta-row dt {
+        color: var(--muted);
+      }
+      .summary-meta-row dd {
+        margin: 0;
+        font-weight: 600;
+        text-align: right;
+      }
+
+      .content-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.55fr) minmax(280px, 0.85fr);
+        gap: 1rem;
+      }
+      .main-column,
+      .side-column {
+        min-width: 0;
+      }
+
+      .party-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: .75rem;
+        margin-bottom: 1rem;
+      }
+      .party-card {
+        padding: 1rem;
+        background: var(--surface);
+      }
+      .card-label {
+        margin-bottom: 8px;
+        font-size: 0.8rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .party-name {
+        margin: 0 0 8px;
+        font-size: 0.98rem;
+        color: var(--heading);
+      }
+      .party-lines {
+        display: grid;
+        gap: 3px;
+        font-size: 0.88rem;
+      }
+      .party-lines .muted {
+        color: var(--muted);
+      }
+
+      .side-column {
+        display: grid;
+        gap: .75rem;
+        align-content: start;
+      }
+      .meta-card,
+      .payment-card,
+      .totals-card,
+      .note-card {
+        padding: 1rem;
+      }
+      .meta-list,
+      .payment-list {
+        display: grid;
+        gap: 6px;
+      }
+      .meta-row,
+      .payment-row {
+        display: grid;
+        grid-template-columns: 120px minmax(0, 1fr);
+        gap: 8px;
+        align-items: start;
+        font-size: 0.86rem;
+      }
+      .meta-row span:first-child,
+      .payment-row span:first-child {
+        color: var(--muted);
+      }
+      .meta-row span:last-child,
+      .payment-row span:last-child {
+        min-width: 0;
+        text-align: left;
+        font-weight: 600;
+      }
+      .payment-row.value-nowrap span:last-child {
+        white-space: normal;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        font-size: 0.82rem;
+        letter-spacing: 0;
+      }
+
+      .payment-row.value-iban {
+        display: block;
+      }
+      .payment-row.value-iban span:first-child {
+        display: block;
+        margin-bottom: 0.18rem;
+      }
+      .payment-row.value-iban span:last-child {
+        display: block;
+        white-space: normal;
+        overflow-wrap: normal;
+        word-break: normal;
+        font-size: 0.82rem;
+        line-height: 1.35;
+        letter-spacing: 0;
+      }
+
+      .payment-row.value-break span:last-child {
+        white-space: normal;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+
+      .payment-card {
+        background: var(--surface);
+      }
+      .payment-primary {
+        margin-bottom: 8px;
+        font-size: 0.94rem;
+        font-weight: 700;
+        color: var(--heading);
+      }
+      .qr-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 10px;
+      }
+      .qr-card {
+        width: 96px;
+        padding: 7px 7px 6px;
+        text-align: center;
+        background: #fff;
+      }
+      .qr-card h4 {
+        margin: 0 0 6px;
+        font-size: 0.68rem;
+        color: var(--muted);
+      }
+      .qr-card img {
+        width: 74px;
+        max-width: 100%;
+        height: auto;
+        display: block;
+        margin: 0 auto;
+      }
+
+      .section-title {
+        margin: 0 0 8px;
+        font-size: 1rem;
+        color: var(--heading);
+      }
+
+      .items-table {
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-md);
+        overflow: hidden;
+        background: #fff;
+      }
+      .items-table th,
+      .items-table td {
+        padding: 9px 11px;
+        border-bottom: 1px solid var(--line);
+        vertical-align: top;
+      }
+      .items-table th {
+        background: #f8fafc;
+        font-size: 0.76rem;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+        text-align: left;
+      }
+      .items-table tbody tr:last-child td {
+        border-bottom: none;
+      }
+      .items-table .num {
+        text-align: right;
+        white-space: nowrap;
+      }
+
+      .totals-card {
+        margin-top: .75rem;
+        margin-left: auto;
+        max-width: 320px;
+        background: var(--surface);
+      }
+      .totals-list {
+        display: grid;
+        gap: 7px;
+      }
+      .totals-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        font-size: 0.88rem;
+      }
+      .totals-row span:first-child {
+        color: var(--muted);
+      }
+      .totals-row strong,
+      .totals-row.total span:last-child {
+        color: var(--heading);
+      }
+      .totals-row.total {
+        margin-top: 2px;
+        padding-top: 8px;
+        border-top: 1px solid var(--line-strong);
+        font-size: 1rem;
+        font-weight: 800;
+      }
+
+      .note-card {
+        margin-top: 12px;
+        white-space: pre-wrap;
+        background: var(--surface);
+      }
+
+      .invoice-header,
+      .party-grid,
+      .payment-card,
+      .meta-card,
+      .totals-card,
+      .note-card,
+      .qr-card {
+        break-inside: avoid;
+        page-break-inside: avoid;
+      }
+
+      body.pdf-mode .invoice-paper {
+        padding: 0;
+      }
+      body.pdf-mode .invoice-header {
+        grid-template-columns: minmax(0, 1fr) 270px;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+      body.pdf-mode .invoice-title {
+        font-size: 1.7rem;
+      }
+      body.pdf-mode .invoice-subtitle {
+        display: none;
+      }
+      body.pdf-mode .summary-card,
+      body.pdf-mode .party-card,
+      body.pdf-mode .meta-card,
+      body.pdf-mode .payment-card,
+      body.pdf-mode .totals-card,
+      body.pdf-mode .note-card {
+        padding: 10px 12px;
+      }
+      body.pdf-mode .cancelled-banner {
+        margin-bottom: 10px;
+        padding: 8px 10px;
+      }
+      body.pdf-mode .cancelled-banner strong {
+        font-size: 0.9rem;
+      }
+      body.pdf-mode .cancelled-banner span {
+        font-size: 0.76rem;
+      }
+      body.pdf-mode .party-grid,
+      body.pdf-mode .content-grid {
+        gap: 10px;
+      }
+      body.pdf-mode .content-grid {
+        grid-template-columns: minmax(0, 1.32fr) minmax(250px, 0.98fr);
+      }
+      body.pdf-mode .summary-label,
+      body.pdf-mode .card-label {
+        font-size: 0.74rem;
+      }
+      body.pdf-mode .summary-amount {
+        font-size: 1.48rem;
+      }
+      body.pdf-mode .summary-vs {
+        margin-top: 8px;
+        padding: 7px 8px;
+      }
+      body.pdf-mode .summary-vs-label {
+        font-size: 0.68rem;
+      }
+      body.pdf-mode .summary-vs-value {
+        font-size: 0.9rem;
+      }
+      body.pdf-mode .summary-meta-row {
+        font-size: 0.82rem;
+      }
+      body.pdf-mode .party-name {
+        font-size: 0.92rem;
+      }
+      body.pdf-mode .party-lines {
+        font-size: 0.82rem;
+        gap: 2px;
+      }
+      body.pdf-mode .meta-row {
+        align-items: baseline;
+        font-size: 0.82rem;
+      }
+      body.pdf-mode .meta-row span:last-child {
+        overflow-wrap: anywhere;
+      }
+      body.pdf-mode .payment-primary {
+        margin-bottom: 6px;
+        font-size: 0.98rem;
+      }
+      body.pdf-mode .payment-row {
+        display: block;
+        font-size: 0.8rem;
+      }
+      body.pdf-mode .payment-row span:first-child {
+        display: block;
+        margin-bottom: 1px;
+      }
+      body.pdf-mode .payment-row span:last-child {
+        display: block;
+        text-align: left;
+        overflow-wrap: anywhere;
+        font-size: 0.88rem;
+      }
+      body.pdf-mode .payment-account-label {
+        display: none;
+      }
+      body.pdf-mode .section-title {
+        margin-bottom: 6px;
+        font-size: 0.92rem;
+      }
+      body.pdf-mode .items-table th,
+      body.pdf-mode .items-table td {
+        padding: 7px 8px;
+      }
+      body.pdf-mode .items-table th {
+        font-size: 0.72rem;
+      }
+      body.pdf-mode .items-table td {
+        font-size: 0.86rem;
+      }
+      body.pdf-mode .qr-card {
+        width: 76px;
+        padding: 5px;
+      }
+      body.pdf-mode .qr-card h4 {
+        margin-bottom: 4px;
+        font-size: 0.62rem;
+        line-height: 1.15;
+      }
+      body.pdf-mode .qr-card img {
+        width: 56px;
+      }
+      body.pdf-mode .totals-card {
+        margin-top: 8px;
+        max-width: 260px;
+      }
+      body.pdf-mode .totals-row {
+        font-size: 0.84rem;
+      }
+      body.pdf-mode .totals-row.total {
+        font-size: 0.96rem;
+      }
+
+      .muted {
+        color: var(--muted);
+      }
+
+      body.public-mode {
+        background: #eef3f8;
+      }
+      html[data-public-invoice-theme="dark"] body.public-mode {
+        --page-bg: #0f1720;
+        --paper-bg: #182230;
+        --line: #334155;
+        --line-strong: #475569;
+        --muted: #98a6b8;
+        --text: #dce6f2;
+        --heading: #f8fafc;
+        --accent-soft: rgba(32, 107, 196, 0.20);
+        --success-soft: rgba(47, 179, 68, 0.18);
+        --danger-soft: rgba(180, 35, 24, 0.16);
+        --surface: #202d3d;
+        --shadow: 0 18px 44px rgba(0, 0, 0, 0.32);
+        background:
+          radial-gradient(circle at top left, rgba(32, 107, 196, 0.13), transparent 34rem),
+          #0f1720;
+        color-scheme: dark;
+      }
+      body.public-mode .print-shell {
+        max-width: 1160px;
+        padding: 1rem 1.25rem 2.5rem;
+      }
+      body.public-mode .toolbar {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        margin: 0 auto 1rem;
+        max-width: 980px;
+        min-height: 4.5rem;
+        padding: 0.8rem 1rem;
+        border: 1px solid rgba(32, 107, 196, 0.12);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.94);
+        box-shadow: 0 10px 28px rgba(24, 36, 51, 0.08);
+        backdrop-filter: blur(10px);
+      }
+      body.public-mode .toolbar-title::before {
+        border-radius: 7px;
+        box-shadow: 0 8px 18px rgba(32, 107, 196, 0.22);
+      }
+      body.public-mode .toolbar-title strong {
+        font-size: 1rem;
+        letter-spacing: 0;
+      }
+      body.public-mode .toolbar-title span {
+        font-size: 0.82rem;
+      }
+      body.public-mode .toolbar-actions {
+        gap: 0.45rem;
+      }
+      body.public-mode .toolbar-actions form.inline-form {
+        display: inline-flex;
+        margin: 0;
+      }
+      .public-online-payment {
+        margin: 0.75rem 0 0;
+        padding: 0.75rem;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-md);
+        background: var(--accent-soft);
+      }
+      .public-online-payment form.inline-form {
+        margin: 0.55rem 0 0;
+      }
+      .public-payment-choice {
+        margin-top: 0.55rem;
+        padding-top: 0.55rem;
+        border-top: 1px solid var(--line);
+        font-size: 0.84rem;
+      }
+      .public-payment-choice strong {
+        display: block;
+        margin-bottom: 0.18rem;
+      }
+      .payment-alert {
+        margin: 0.45rem 0;
+        padding: 0.55rem 0.65rem;
+        border-radius: var(--radius-sm);
+        background: var(--surface);
+        border: 1px solid var(--line);
+        font-size: 0.86rem;
+      }
+      .payment-alert.error {
+        background: var(--danger-soft);
+        color: var(--danger);
+      }
+      .payment-alert.info {
+        background: var(--success-soft);
+        color: var(--success);
+      }
+      body.public-mode .public-theme-toggle {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 auto;
+        width: 2.15rem;
+        min-height: 2.15rem;
+        border: 1px solid rgba(32, 107, 196, 0.12);
+        border-radius: 8px;
+        background: rgba(248, 251, 254, 0.82);
+        color: var(--muted);
+        cursor: pointer;
+        font-size: 1rem;
+        box-shadow: none;
+      }
+      body.public-mode .public-theme-toggle:hover,
+      body.public-mode .public-theme-toggle:focus-visible {
+        border-color: rgba(32, 107, 196, 0.28);
+        color: var(--heading);
+        outline: none;
+      }
+      body.public-mode .public-theme-toggle .ti-sun,
+      html[data-public-invoice-theme="dark"] body.public-mode .public-theme-toggle .ti-moon {
+        display: none;
+      }
+      html[data-public-invoice-theme="dark"] body.public-mode .public-theme-toggle .ti-sun {
+        display: inline-block;
+      }
+      body.public-mode .toolbar-actions .btn,
+      body.public-mode .toolbar-actions button.btn {
+        min-height: 2.15rem;
+        padding: 0.42rem 0.72rem;
+        border-radius: 7px;
+        background: #fff;
+        font-size: 0.86rem;
+      }
+      body.public-mode .toolbar-actions .btn.primary,
+      body.public-mode .toolbar-actions button.btn.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+      body.public-mode .public-copy-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 1.9rem;
+        height: 1.9rem;
+        min-width: 1.9rem;
+        padding: 0;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        background: var(--paper-bg);
+        color: var(--accent);
+        font-size: 1rem;
+        line-height: 1;
+        cursor: pointer;
+      }
+      body.public-mode .public-copy-button .ti {
+        pointer-events: none;
+      }
+      body.public-mode .public-copy-button .ti-check {
+        display: none;
+      }
+      body.public-mode .public-copy-button.is-copied {
+        border-color: rgba(47, 179, 68, 0.45);
+        color: #2fb344;
+      }
+      body.public-mode .public-copy-button.is-copied .ti-copy {
+        display: none;
+      }
+      body.public-mode .public-copy-button.is-copied .ti-check {
+        display: inline-block;
+      }
+      body.public-mode .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+      body.public-mode .public-copy-button:hover,
+      body.public-mode .public-copy-button:focus-visible {
+        border-color: var(--accent);
+        outline: none;
+      }
+      body.public-mode .invoice-paper {
+        max-width: 980px;
+        margin: 0 auto;
+        padding: 1.5rem;
+        border-color: rgba(24, 36, 51, 0.10);
+        border-radius: 8px;
+        box-shadow: 0 18px 44px rgba(24, 36, 51, 0.08);
+      }
+      body.public-mode .invoice-header {
+        grid-template-columns: minmax(0, 1fr) minmax(250px, 300px);
+        gap: 1.25rem;
+        align-items: stretch;
+        margin: -0.25rem 0 1.25rem;
+        padding-bottom: 1.25rem;
+        border-bottom: 1px solid var(--line);
+      }
+      body.public-mode .invoice-kicker {
+        margin-top: 0.15rem;
+        color: var(--accent);
+      }
+      body.public-mode .invoice-title {
+        font-size: 2rem;
+        letter-spacing: 0;
+      }
+      body.public-mode .summary-card,
+      body.public-mode .party-card,
+      body.public-mode .meta-card,
+      body.public-mode .payment-card,
+      body.public-mode .totals-card,
+      body.public-mode .note-card {
+        border-radius: 7px;
+        border-color: rgba(24, 36, 51, 0.10);
+        background: #f8fbfe;
+      }
+      body.public-mode .summary-card {
+        border-color: rgba(32, 107, 196, 0.16);
+        background: linear-gradient(180deg, #f7fbff 0%, #eef6ff 100%);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+      }
+      body.public-mode .summary-amount {
+        font-size: 1.72rem;
+      }
+      body.public-mode .summary-meta {
+        margin-top: 0.85rem;
+      }
+      body.public-mode .content-grid {
+        grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
+        gap: 1rem;
+        align-items: start;
+      }
+      body.public-mode .party-grid {
+        gap: 0.65rem;
+        margin-bottom: 1rem;
+      }
+      body.public-mode .party-card,
+      body.public-mode .meta-card,
+      body.public-mode .payment-card,
+      body.public-mode .note-card {
+        padding: 0.95rem;
+      }
+      body.public-mode .party-name {
+        font-size: 0.96rem;
+      }
+      body.public-mode .party-lines,
+      body.public-mode .meta-row,
+      body.public-mode .payment-row {
+        font-size: 0.84rem;
+      }
+      body.public-mode .meta-row,
+      body.public-mode .payment-row {
+        grid-template-columns: minmax(86px, 0.82fr) minmax(0, 1fr);
+        gap: 0.6rem;
+      }
+      body.public-mode .payment-list {
+        gap: 0;
+      }
+      body.public-mode .payment-row {
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: start;
+        gap: 0.04rem 0.5rem;
+        min-height: 0;
+        padding: 0.28rem 0;
+        border-bottom: 1px solid rgba(24, 36, 51, 0.06);
+      }
+      body.public-mode .payment-row:last-child {
+        border-bottom: 0;
+      }
+      body.public-mode .payment-row > span:first-child {
+        grid-column: 1;
+        align-self: center;
+      }
+      body.public-mode .payment-row > span:nth-child(2) {
+        grid-column: 1 / -1;
+        grid-row: 2;
+        min-width: 0;
+        max-width: 100%;
+        text-align: left;
+        font-weight: 700;
+        overflow-wrap: anywhere;
+        word-break: normal;
+      }
+      body.public-mode .payment-row.value-nowrap > span:nth-child(2),
+      body.public-mode .payment-row.value-iban > span:nth-child(2) {
+        font-size: 0.82rem;
+        line-height: 1.22;
+        letter-spacing: 0;
+      }
+      body.public-mode .payment-row.value-nowrap,
+      body.public-mode .payment-row.value-iban {
+        display: grid;
+      }
+      body.public-mode .payment-row.value-iban > span:nth-child(2) {
+        white-space: nowrap;
+        overflow-wrap: normal;
+        font-size: clamp(0.72rem, 2.05vw, 0.86rem);
+      }
+      body.public-mode .payment-row.value-iban > span:nth-child(2) {
+        overflow: hidden;
+        text-overflow: clip;
+      }
+      body.public-mode .payment-row > .public-copy-button {
+        grid-column: 2;
+        grid-row: 1;
+        justify-self: end;
+      }
+      body.public-mode .items-table {
+        font-size: 0.9rem;
+      }
+      body.public-mode .items-table th,
+      body.public-mode .items-table td {
+        padding: 0.68rem 0.72rem;
+      }
+      body.public-mode .totals-card {
+        max-width: 300px;
+        background: #f8fbfe;
+      }
+      body.public-mode .totals-row.total span:last-child {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+      }
+      body.public-mode .totals-row.total .public-copy-button {
+        width: 1.65rem;
+        height: 1.65rem;
+        min-width: 1.65rem;
+      }
+      body.public-mode .side-column {
+        gap: 0.65rem;
+      }
+      body.public-mode .toolbar-actions .btn.primary:hover,
+      body.public-mode .toolbar-actions button.btn.primary:hover {
+        background: var(--accent-strong);
+        border-color: var(--accent-strong);
+      }
+      body.public-mode .summary-status.cancelled {
+        background: var(--danger-soft);
+        color: var(--danger);
+      }
+      html[data-public-invoice-theme="dark"] body.public-mode .toolbar {
+        border-color: rgba(148, 163, 184, 0.20);
+        background: rgba(24, 34, 48, 0.94);
+        box-shadow: 0 16px 36px rgba(0, 0, 0, 0.28);
+      }
+      html[data-public-invoice-theme="dark"] body.public-mode .public-theme-toggle {
+        border-color: rgba(148, 163, 184, 0.22);
+        background: rgba(15, 23, 32, 0.72);
+        color: #f8fafc;
+      }
+      html[data-public-invoice-theme="dark"] body.public-mode .toolbar-actions .btn,
+      html[data-public-invoice-theme="dark"] body.public-mode .toolbar-actions button.btn {
+        border-color: rgba(148, 163, 184, 0.26);
+        background: #202d3d;
+        color: var(--heading);
+      }
+      html[data-public-invoice-theme="dark"] body.public-mode .toolbar-actions .btn.primary,
+      html[data-public-invoice-theme="dark"] body.public-mode .toolbar-actions button.btn.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+      html[data-public-invoice-theme="dark"] body.public-mode .invoice-paper,
+      html[data-public-invoice-theme="dark"] body.public-mode .summary-card,
+      html[data-public-invoice-theme="dark"] body.public-mode .party-card,
+      html[data-public-invoice-theme="dark"] body.public-mode .meta-card,
+      html[data-public-invoice-theme="dark"] body.public-mode .payment-card,
+      html[data-public-invoice-theme="dark"] body.public-mode .totals-card,
+      html[data-public-invoice-theme="dark"] body.public-mode .note-card,
+      html[data-public-invoice-theme="dark"] body.public-mode .items-table {
+        border-color: rgba(148, 163, 184, 0.20);
+        background: var(--surface);
+      }
+      html[data-public-invoice-theme="dark"] body.public-mode .summary-card {
+        border-color: rgba(96, 165, 250, 0.20);
+        background: linear-gradient(180deg, #223149 0%, #1d2a3b 100%);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+      }
+      html[data-public-invoice-theme="dark"] body.public-mode .items-table th {
+        background: #121c2a;
+      }
+      html[data-public-invoice-theme="dark"] body.public-mode .items-table th,
+      html[data-public-invoice-theme="dark"] body.public-mode .items-table td {
+        border-bottom-color: rgba(148, 163, 184, 0.18);
+      }
+      html[data-public-invoice-theme="dark"] body.public-mode .qr-card {
+        border-color: rgba(148, 163, 184, 0.22);
+        background: #fff;
+      }
+      html[data-public-invoice-theme="dark"] body.public-mode .cancelled-banner {
+        background: rgba(180, 35, 24, 0.14);
+      }
+
+      .pdf-doc {
+        color: #1f2937;
+        font-size: 0.92rem;
+      }
+      .pdf-doc-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: flex-start;
+        gap: 18px;
+        margin-bottom: 18px;
+        padding-bottom: 24px;
+        border-bottom: 1px solid #dbe2e8;
+      }
+      .pdf-doc-lead {
+        min-width: 0;
+        padding-top: 2px;
+      }
+      .pdf-doc-kicker {
+        margin: 0 0 8px;
+        font-size: 0.74rem;
+        font-weight: 800;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: #6b7280;
+      }
+      .pdf-doc-title {
+        margin: 0;
+        font-size: 2rem;
+        line-height: 1;
+        font-weight: 800;
+        letter-spacing: 0.01em;
+        color: #0f172a;
+      }
+      .pdf-parties {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        align-items: stretch;
+        gap: 14px;
+        margin-bottom: 12px;
+      }
+      .pdf-block {
+        min-height: 126px;
+        padding: 12px 14px;
+        border: 1px solid #dbe2e8;
+        border-radius: 16px;
+        background: #fbfcfd;
+      }
+      .pdf-block-label {
+        margin: 0 0 8px;
+        font-size: 0.74rem;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: #6b7280;
+      }
+      .pdf-party-name {
+        margin: 0 0 8px;
+        font-size: 1rem;
+        line-height: 1.2;
+        font-weight: 800;
+        color: #0f172a;
+      }
+      .pdf-party-lines {
+        display: grid;
+        gap: 3px;
+        font-size: 0.86rem;
+      }
+      .pdf-party-lines .muted {
+        color: #667085;
+      }
+
+      .pdf-info-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        align-items: stretch;
+        gap: 14px;
+        margin-bottom: 14px;
+      }
+      .pdf-info-grid.pdf-overview-grid {
+        grid-template-columns: 1fr;
+      }
+      .pdf-overview-block {
+        min-height: 0;
+        padding-top: 12px;
+        padding-bottom: 12px;
+      }
+      .pdf-overview-block .pdf-block-label {
+        margin-bottom: 10px;
+      }
+      .pdf-overview-list {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px 18px;
+      }
+      .pdf-overview-list.has-tax-date {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+      .pdf-overview-list .pdf-info-row {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 3px;
+      }
+      .pdf-overview-list .pdf-info-row span:first-child {
+        font-size: 0.78rem;
+      }
+      .pdf-overview-list .pdf-info-row span:last-child {
+        white-space: nowrap;
+        overflow-wrap: normal;
+        word-break: normal;
+      }
+      .pdf-info-list {
+        display: grid;
+        gap: 6px;
+      }
+      .pdf-info-row {
+        display: grid;
+        grid-template-columns: minmax(112px, 0.72fr) minmax(0, 1fr);
+        gap: 10px;
+        align-items: start;
+        font-size: 0.84rem;
+      }
+      .pdf-info-row span:first-child {
+        color: #6b7280;
+      }
+      .pdf-info-row span:last-child {
+        overflow-wrap: anywhere;
+        font-weight: 700;
+        color: #111827;
+      }
+      .pdf-info-row.value-nowrap span:last-child {
+        white-space: nowrap;
+        overflow-wrap: normal;
+        word-break: normal;
+        font-family: inherit;
+        font-size: 0.84rem;
+        letter-spacing: 0;
+      }
+
+      .pdf-info-row.value-iban {
+        display: block;
+        margin-top: 2px;
+        padding-top: 5px;
+        border-top: 1px solid #e7edf4;
+      }
+      .pdf-info-row.value-iban span:first-child {
+        display: block;
+        margin-bottom: 2px;
+      }
+      .pdf-info-row.value-iban span:last-child {
+        display: block;
+        white-space: normal;
+        overflow-wrap: normal;
+        word-break: normal;
+        font-family: inherit;
+        font-size: 0.84rem;
+        line-height: 1.35;
+        letter-spacing: 0;
+      }
+
+      .pdf-info-row.value-break span:last-child {
+        white-space: normal;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+      .pdf-info-row.value-strong span:last-child {
+        font-family: inherit;
+        font-size: 0.84rem;
+        letter-spacing: 0;
+      }
+      .pdf-payment-wide {
+        min-height: 0;
+        margin-bottom: 14px;
+        padding-bottom: 10px;
+      }
+      .pdf-payment-wide .pdf-block-label {
+        margin-bottom: 12px;
+      }
+      .pdf-payment-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 14px;
+        align-items: center;
+      }
+      .pdf-payment-grid.has-qr {
+        grid-template-columns: minmax(0, 1fr) 64px;
+        gap: 12px;
+      }
+      .pdf-payment-details {
+        display: grid;
+        grid-template-columns: minmax(0, 0.88fr) minmax(0, 1.12fr);
+        column-gap: 16px;
+        row-gap: 6px;
+        min-width: 0;
+      }
+      .pdf-payment-details.is-simple {
+        grid-template-columns: minmax(0, 1fr);
+      }
+      .pdf-payment-col {
+        display: grid;
+        align-content: start;
+        gap: 6px;
+        min-width: 0;
+      }
+      .pdf-payment-col:last-child {
+        box-sizing: border-box;
+        padding-left: 16px;
+        border-left: 1px solid #e7edf4;
+      }
+      .pdf-payment-details.is-simple .pdf-payment-col:last-child {
+        padding-left: 0;
+        border-left: 0;
+      }
+      .pdf-payment-row {
+        display: grid;
+        grid-template-columns: minmax(114px, 0.66fr) minmax(0, 1fr);
+        gap: 7px;
+        align-items: baseline;
+        min-width: 0;
+        font-family: inherit;
+        font-size: 0.70rem;
+        line-height: 1.38;
+      }
+      .pdf-payment-col:last-child .pdf-payment-row {
+        grid-template-columns: minmax(92px, 0.54fr) minmax(0, 1.46fr);
+        gap: 7px;
+      }
+      .pdf-payment-col:last-child .pdf-payment-row span:first-child {
+        white-space: nowrap;
+      }
+      .pdf-payment-row span:first-child {
+        white-space: nowrap;
+        color: #6b7280;
+      }
+      .pdf-payment-row span:last-child {
+        min-width: 0;
+        white-space: nowrap;
+        overflow-wrap: normal;
+        word-break: normal;
+        font-family: inherit;
+        font-size: inherit;
+        font-weight: 700;
+        letter-spacing: 0;
+        color: #111827;
+      }
+      .pdf-payment-row.value-nowrap span:last-child,
+      .pdf-payment-row.value-iban span:last-child {
+        white-space: nowrap;
+        overflow-wrap: normal;
+        word-break: normal;
+      }
+      .pdf-payment-row.value-nowrap span:last-child {
+        font-size: 0.69rem;
+      }
+      .pdf-payment-row.value-iban span:last-child {
+        font-size: 0.60rem;
+      }
+      .pdf-payment-qr-inline {
+        justify-self: end;
+        align-self: center;
+      }
+      .pdf-qr {
+        width: 64px;
+        padding: 4px;
+        border: 1px solid #dbe2e8;
+        border-radius: 9px;
+        background: #fff;
+        text-align: center;
+        flex: 0 0 auto;
+      }
+      .pdf-qr img {
+        width: 54px;
+        max-width: 100%;
+        height: auto;
+        display: block;
+        margin: 0 auto;
+      }
+      .pdf-qr-caption {
+        margin-top: 4px;
+        font-size: 0.54rem;
+        line-height: 1.12;
+        font-weight: 700;
+        color: #6b7280;
+      }
+
+      .pdf-items-section {
+        margin-bottom: 12px;
+      }
+      .pdf-items-label {
+        margin: 0;
+        padding: 0 10px 8px;
+        border-bottom: 1px solid #d9e0e7;
+        font-size: 0.72rem;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: #6b7280;
+      }
+      .pdf-items-list {
+        display: grid;
+      }
+      .pdf-item-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(145px, auto);
+        gap: 18px;
+        align-items: start;
+        padding: 10px;
+        border-bottom: 1px solid #d9e0e7;
+      }
+      .pdf-item-title {
+        font-size: 0.88rem;
+        line-height: 1.35;
+        font-weight: 800;
+        color: #111827;
+      }
+      .pdf-item-meta {
+        margin-top: 2px;
+        font-size: 0.78rem;
+        line-height: 1.35;
+        color: #6b7280;
+      }
+      .pdf-item-total {
+        justify-self: end;
+        white-space: nowrap;
+        font-size: 0.98rem;
+        line-height: 1.25;
+        font-weight: 800;
+        color: #0f172a;
+      }
+
+      .pdf-footer {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 300px;
+        gap: 16px;
+        align-items: end;
+      }
+      .pdf-footer-notes {
+        display: grid;
+        gap: 8px;
+        min-height: 24px;
+      }
+      .pdf-footer-payment {
+        display: flex;
+        align-items: flex-end;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .pdf-note {
+        font-size: 0.82rem;
+        line-height: 1.45;
+        color: #6b7280;
+        white-space: pre-wrap;
+      }
+      .pdf-legal-footer {
+        font-size: 0.74rem;
+        line-height: 1.35;
+        color: #6b7280;
+      }
+      .pdf-paid-note {
+        display: inline-block;
+        margin-top: 4px;
+        padding: 7px 10px;
+        border: 1px solid rgba(22, 101, 52, 0.18);
+        border-radius: 12px;
+        background: #ecfdf3;
+        color: #166534;
+        font-size: 0.74rem;
+        line-height: 1.35;
+        font-weight: 700;
+      }
+      .pdf-totals {
+        margin-left: auto;
+        width: 100%;
+        padding-top: 8px;
+        border-top: 2px solid #8e98a4;
+      }
+      .pdf-totals-list {
+        display: grid;
+        gap: 6px;
+      }
+      .pdf-totals-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 14px;
+        font-size: 0.84rem;
+      }
+      .pdf-totals-row span:first-child {
+        color: #6b7280;
+      }
+      .pdf-totals-row.total {
+        margin-top: 3px;
+        font-size: 1rem;
+        font-weight: 800;
+        color: #0f172a;
+      }
+
+      .pdf-doc-header,
+      .pdf-parties,
+      .pdf-info-grid,
+      .pdf-block,
+      .pdf-items-table,
+      .pdf-footer,
+      .pdf-totals {
+        break-inside: avoid;
+        page-break-inside: avoid;
+      }
+
+
+      body.pdf-mode.invoice-style-classic .pdf-doc {
+        color: #241b13;
+        font-family: Georgia, "Times New Roman", serif;
+      }
+      body.pdf-mode.invoice-style-classic .pdf-doc-header {
+        padding-bottom: 10px;
+        border-bottom: 2px solid #8f6f3d;
+      }
+      body.pdf-mode.invoice-style-classic .pdf-doc-kicker,
+      body.pdf-mode.invoice-style-classic .pdf-block-label {
+        color: #8f6f3d;
+      }
+      body.pdf-mode.invoice-style-classic .pdf-doc-title,
+      body.pdf-mode.invoice-style-classic .pdf-party-name,
+      body.pdf-mode.invoice-style-classic .pdf-totals-row.total {
+        color: #2b2117;
+      }
+      body.pdf-mode.invoice-style-classic .pdf-doc-title {
+        font-family: Georgia, "Times New Roman", serif;
+        letter-spacing: 0.02em;
+      }
+      body.pdf-mode.invoice-style-classic .pdf-block {
+        background: #fffaf0;
+        border-color: #d5c2a2;
+        border-radius: 6px;
+      }
+      body.pdf-mode.invoice-style-classic .pdf-info-row span:first-child,
+      body.pdf-mode.invoice-style-classic .pdf-payment-row span:first-child,
+      body.pdf-mode.invoice-style-classic .pdf-totals-row span:first-child,
+      body.pdf-mode.invoice-style-classic .pdf-note,
+      body.pdf-mode.invoice-style-classic .pdf-legal-footer {
+        color: #6b5f50;
+      }
+      body.pdf-mode.invoice-style-classic .pdf-payment-row span:last-child {
+        color: #2b2117;
+      }
+      body.pdf-mode.invoice-style-classic .pdf-payment-col:last-child {
+        border-left-color: #e6d9c2;
+      }
+      body.pdf-mode.invoice-style-classic .pdf-items-table th {
+        background: #eadcc2;
+        border-bottom-color: #cbb792;
+        color: #3d3022;
+      }
+      body.pdf-mode.invoice-style-classic .pdf-items-table td {
+        border-bottom-color: #e6d9c2;
+      }
+      body.pdf-mode.invoice-style-classic .pdf-totals {
+        border-top: 2px solid #8f6f3d;
+      }
+
+      body.pdf-mode.invoice-style-minimal .pdf-doc {
+        color: #111;
+        font-family: Arial, Helvetica, sans-serif;
+      }
+      body.pdf-mode.invoice-style-minimal .pdf-doc-header {
+        padding-bottom: 8px;
+        border-bottom: 1px solid #111;
+      }
+      body.pdf-mode.invoice-style-minimal .pdf-doc-kicker,
+      body.pdf-mode.invoice-style-minimal .pdf-block-label {
+        color: #111;
+        letter-spacing: 0.08em;
+      }
+      body.pdf-mode.invoice-style-minimal .pdf-doc-title,
+      body.pdf-mode.invoice-style-minimal .pdf-party-name,
+      body.pdf-mode.invoice-style-minimal .pdf-totals-row.total {
+        color: #111;
+      }
+      body.pdf-mode.invoice-style-minimal .pdf-doc-title {
+        font-size: 1.85rem;
+        letter-spacing: 0;
+      }
+      body.pdf-mode.invoice-style-minimal .pdf-block {
+        min-height: 0;
+        padding-left: 0;
+        padding-right: 0;
+        border: 0;
+        border-top: 1px solid #111;
+        border-radius: 0;
+        background: #fff;
+      }
+      body.pdf-mode.invoice-style-minimal .pdf-info-row span:first-child,
+      body.pdf-mode.invoice-style-minimal .pdf-payment-row span:first-child,
+      body.pdf-mode.invoice-style-minimal .pdf-totals-row span:first-child,
+      body.pdf-mode.invoice-style-minimal .pdf-note,
+      body.pdf-mode.invoice-style-minimal .pdf-legal-footer {
+        color: #333;
+      }
+      body.pdf-mode.invoice-style-minimal .pdf-payment-row span:last-child {
+        color: #111;
+      }
+      body.pdf-mode.invoice-style-minimal .pdf-payment-col:last-child {
+        border-left-color: #d1d5db;
+      }
+      body.pdf-mode.invoice-style-minimal .pdf-items-table {
+        border-top: 1px solid #111;
+      }
+      body.pdf-mode.invoice-style-minimal .pdf-items-table th {
+        background: #fff;
+        border-bottom: 1px solid #111;
+        color: #111;
+      }
+      body.pdf-mode.invoice-style-minimal .pdf-items-table td {
+        border-bottom-color: #bbb;
+      }
+      body.pdf-mode.invoice-style-minimal .pdf-totals {
+        border-top: 1px solid #111;
+        background: #fff;
+      }
+
+      @media (max-width: 920px) {
+        .invoice-header,
+        .content-grid,
+        .party-grid,
+        .pdf-parties,
+        .pdf-info-grid,
+        .pdf-footer {
+          grid-template-columns: 1fr;
+        }
+        .pdf-payment-grid.has-qr,
+        .pdf-payment-details {
+          grid-template-columns: 1fr;
+        }
+        .pdf-payment-col:last-child {
+          padding-left: 0;
+          border-left: 0;
+        }
+        .pdf-overview-list {
+          grid-template-columns: 1fr;
+        }
+        .pdf-payment-qr-inline {
+          justify-self: start;
+        }
+        .totals-card {
+          max-width: none;
+        }
+        body.public-mode .print-shell {
+          padding: 0.75rem 0.75rem 1.5rem;
+        }
+        body.public-mode .toolbar {
+          position: static;
+          max-width: none;
+          align-items: flex-start;
+          flex-direction: column;
+          margin-bottom: 0.75rem;
+        }
+        body.public-mode .toolbar-actions {
+          justify-content: flex-start;
+        }
+        body.public-mode .toolbar-actions .btn,
+        body.public-mode .toolbar-actions button.btn {
+          flex: 1 1 auto;
+          justify-content: center;
+          text-align: center;
+        }
+        body.public-mode .invoice-paper {
+          padding: 1rem;
+          border-radius: 8px;
+        }
+        body.public-mode .invoice-header {
+          display: block;
+          gap: 0.85rem;
+          margin-bottom: 1rem;
+          padding-bottom: 1rem;
+        }
+        body.public-mode .invoice-header > div {
+          min-width: 0;
+        }
+        body.public-mode .invoice-title {
+          font-size: 1.65rem;
+          overflow-wrap: anywhere;
+          word-break: break-word;
+        }
+        body.public-mode .summary-card {
+          margin-top: 0.85rem;
+        }
+        body.public-mode .content-grid,
+        body.public-mode .party-grid {
+          display: block;
+        }
+        body.public-mode .party-card + .party-card,
+        body.public-mode .side-column,
+        body.public-mode .side-column > * + * {
+          margin-top: 0.75rem;
+        }
+        body.public-mode .summary-card,
+        body.public-mode .party-card,
+        body.public-mode .meta-card,
+        body.public-mode .payment-card,
+        body.public-mode .note-card {
+          padding: 0.85rem;
+        }
+        body.public-mode .meta-row,
+        body.public-mode .payment-row {
+          grid-template-columns: minmax(88px, 0.8fr) minmax(0, 1fr);
+        }
+        body.public-mode .payment-row {
+          grid-template-columns: minmax(0, 1fr) auto;
+        }
+        body.public-mode .payment-row.value-iban > span:nth-child(2) {
+          font-size: clamp(0.58rem, 2.6vw, 0.74rem);
+        }
+        body.public-mode .items-table {
+          display: block;
+          max-width: 100%;
+          overflow-x: auto;
+          -webkit-overflow-scrolling: touch;
+        }
+        body.public-mode .items-table,
+        body.public-mode .items-table thead,
+        body.public-mode .items-table tbody,
+        body.public-mode .items-table tr,
+        body.public-mode .items-table td {
+          display: block;
+          width: 100%;
+        }
+        body.public-mode .items-table {
+          overflow: hidden;
+        }
+        body.public-mode .items-table thead {
+          display: none;
+        }
+        body.public-mode .items-table tr {
+          padding: 0.7rem 0.8rem;
+          border-bottom: 1px solid var(--line);
+        }
+        body.public-mode .items-table tr:last-child {
+          border-bottom: 0;
+        }
+        body.public-mode .items-table td,
+        body.public-mode .items-table .num {
+          display: grid;
+          grid-template-columns: minmax(92px, 0.8fr) minmax(0, 1fr);
+          gap: 0.75rem;
+          padding: 0.22rem 0;
+          border-bottom: 0;
+          text-align: left;
+          white-space: normal;
+        }
+        body.public-mode .items-table td::before {
+          content: attr(data-label);
+          color: var(--muted);
+          font-size: 0.72rem;
+          font-weight: 800;
+          letter-spacing: 0.05em;
+          text-transform: uppercase;
+        }
+        body.public-mode .totals-card {
+          width: 100%;
+          max-width: none;
+          margin-left: 0;
+        }
+      }
+
+      @media print {
+        .screen-only { display: none !important; }
+        body {
+          background: #fff;
+        }
+        .print-shell {
+          max-width: none;
+          margin: 0;
+          padding: 0;
+        }
+        .invoice-paper {
+          border: none;
+          border-radius: 0;
+          box-shadow: none;
+          padding: 0;
+        }
+      }
+    </style>
+  </head>
+  <body class="{% if pdf_mode %}pdf-mode {% endif %}{% if public_mode %}public-mode{% else %}internal-mode{% endif %} invoice-style-{{ invoice_style or 'modern' }}">
+    <div class="print-shell">
+      <div class="toolbar screen-only">
+        <div class="toolbar-title">
+          <strong>{{ document_label or invoice_i18n.document or 'Doklad' }} {{ invoice.number or '—' }}</strong>
+          <span>
+            {{ buyer.name or invoice_i18n.no_buyer or 'Bez odběratele' }}
+            {% if source_invoice_number %} · {{ invoice_i18n.linked_document or 'Navázaný doklad' }}: {{ source_invoice_number }}{% endif %}
+          </span>
+        </div>
+        <div class="toolbar-actions">
+          {% set online_payment = public_invoice_payment or {} %}
+          {% if back_url %}
+            <a class="btn" href="{{ back_url }}">{{ invoice_i18n.back or 'Zpět' }}</a>
+          {% endif %}
+          {% if public_mode %}
+            {% if not pdf_mode %}
+              <button class="public-theme-toggle" type="button" data-public-invoice-theme-toggle title="Přepnout vzhled náhledu" aria-label="Přepnout na tmavý režim">
+                <i class="ti ti-moon" aria-hidden="true"></i>
+                <i class="ti ti-sun" aria-hidden="true"></i>
+              </button>
+            {% endif %}
+            {% if public_pdf_url %}
+              <a class="btn" href="{{ public_pdf_url }}" target="_blank" rel="noopener">{{ invoice_i18n.open_pdf or 'Otevřít PDF' }}</a>
+            {% endif %}
+            {% if public_pdf_download_url %}
+              <a class="btn" href="{{ public_pdf_download_url }}">{{ invoice_i18n.download_pdf or 'Stáhnout PDF' }}</a>
+            {% endif %}
+            {% if public_isdoc_download_url %}
+              <a class="btn" href="{{ public_isdoc_download_url }}">ISDOC</a>
+            {% endif %}
+            {% if not pdf_mode and online_payment.online_available %}
+              <form class="inline-form" method="post" action="{{ online_payment.pay_url }}">
+                <button class="btn primary" type="submit">Zaplatit online</button>
+              </form>
+            {% endif %}
+          {% else %}
+            {% if internal_pdf_url %}
+              <a class="btn" href="{{ internal_pdf_url }}" target="_blank" rel="noopener">{{ invoice_i18n.open_pdf or 'Otevřít PDF' }}</a>
+            {% endif %}
+            {% if internal_pdf_download_url %}
+              <a class="btn" href="{{ internal_pdf_download_url }}">{{ invoice_i18n.download_pdf or 'Stáhnout PDF' }}</a>
+            {% endif %}
+            {% if internal_isdoc_download_url %}
+              <a class="btn" href="{{ internal_isdoc_download_url }}">ISDOC</a>
+            {% endif %}
+          {% endif %}
+          <button class="btn primary" type="button" onclick="window.print()">{{ invoice_i18n.print or 'Vytisknout' }}</button>
+        </div>
+      </div>
+
+      <div class="invoice-paper">
+        {% if invoice.status == 'cancelled' %}
+          <section class="cancelled-banner">
+            <strong>{{ invoice_i18n.cancelled or 'Stornováno' }}</strong>
+            <span>{{ invoice_i18n.cancelled_text or 'Tento doklad byl stornován a neslouží k úhradě.' }}</span>
+          </section>
+        {% endif %}
+        {% if pdf_mode %}
+          <div class="pdf-doc">
+            <header class="pdf-doc-header">
+              <div class="pdf-doc-lead">
+                <div class="pdf-doc-kicker">{{ document_kicker or invoice_i18n.document or 'Doklad' }}</div>
+                <h1 class="pdf-doc-title">{{ invoice.number or '—' }}</h1>
+                {% if source_invoice_number %}
+                  <div class="pdf-note">{{ invoice_i18n.linked_document or 'Navázaný doklad' }}: {{ source_invoice_number }}</div>
+                {% endif %}
+              </div>
+            </header>
+
+            <section class="pdf-parties">
+              <section class="pdf-block">
+                <div class="pdf-block-label">{{ invoice_i18n.seller or 'Dodavatel' }}</div>
+                <h2 class="pdf-party-name">{{ seller.name or '—' }}</h2>
+                <div class="pdf-party-lines">
+                  {% if seller.street %}<div class="muted">{{ seller.street }}</div>{% endif %}
+                  {% if seller.zip or seller.city %}<div class="muted">{{ seller.zip }} {{ seller.city }}</div>{% endif %}
+                  {% if seller.country %}<div class="muted">{{ seller.country }}</div>{% endif %}
+                  {% if seller.ico %}<div>{{ invoice_i18n.ico or 'IČO' }}: {{ seller.ico }}</div>{% endif %}
+                  {% if seller.dic %}<div>{{ invoice_i18n.dic or 'DIČ' }}: {{ seller.dic }}</div>{% endif %}
+                  {% if seller.phone %}<div>{{ seller.phone }}</div>{% endif %}
+                </div>
+              </section>
+
+              <section class="pdf-block">
+                <div class="pdf-block-label">{{ invoice_i18n.buyer or 'Odběratel' }}</div>
+                <h2 class="pdf-party-name">{{ buyer.name or '—' }}</h2>
+                <div class="pdf-party-lines">
+                  {% if buyer.street %}<div class="muted">{{ buyer.street }}</div>{% endif %}
+                  {% if buyer.zip or buyer.city %}<div class="muted">{{ buyer.zip }} {{ buyer.city }}</div>{% endif %}
+                  {% if buyer.country %}<div class="muted">{{ buyer.country }}</div>{% endif %}
+                  {% if buyer.ico %}<div>{{ invoice_i18n.ico or 'IČO' }}: {{ buyer.ico }}</div>{% endif %}
+                  {% if buyer.dic %}<div>{{ invoice_i18n.dic or 'DIČ' }}: {{ buyer.dic }}</div>{% endif %}
+                  {% if buyer.phone %}<div>{{ buyer.phone }}</div>{% endif %}
+                </div>
+              </section>
+            </section>
+
+            <section class="pdf-info-grid pdf-overview-grid">
+              <section class="pdf-block pdf-overview-block">
+                <div class="pdf-block-label">{{ invoice_i18n.overview or 'Přehled' }}</div>
+                <div class="pdf-info-list pdf-overview-list {% if is_vat_payer %}has-tax-date{% endif %}">
+                  <div class="pdf-info-row">
+                    <span>{{ invoice_i18n.issue_date or 'Datum vystavení' }}</span>
+                    <span>{{ invoice.issue_date }}</span>
+                  </div>
+                  {% if is_vat_payer %}
+                    <div class="pdf-info-row">
+                      <span>{{ invoice_i18n.taxable_supply_date or 'DUZP' }}</span>
+                      <span>{{ taxable_supply_date or invoice.issue_date }}</span>
+                    </div>
+                  {% endif %}
+                  <div class="pdf-info-row">
+                    <span>{{ invoice_i18n.due_date or 'Datum splatnosti' }}</span>
+                    <span>{{ invoice.due_date }}</span>
+                  </div>
+                  <div class="pdf-info-row">
+                    <span>{{ invoice_i18n.currency or 'Měna' }}</span>
+                    <span>{{ invoice.currency }}</span>
+                  </div>
+                </div>
+              </section>
+            </section>
+
+            {% if payment_method %}
+              <section class="pdf-block pdf-payment-wide">
+                <div class="pdf-block-label">{{ invoice_i18n.payment_details or 'Platební údaje' }}</div>
+                <div class="pdf-payment-grid {% if payment_method == 'bank_transfer' and payment_qr_codes %}has-qr{% endif %}">
+                  <div class="pdf-payment-details {% if payment_method != 'bank_transfer' %}is-simple{% endif %}">
+                    <div class="pdf-payment-col">
+                      <div class="pdf-payment-row">
+                        <span>{{ invoice_i18n.payment_method or 'Způsob platby' }}</span>
+                        <span>{{ payment_method_label or (payment_method | invoice_payment_method) }}</span>
+                      </div>
+	                      {% if payment_method == 'bank_transfer' %}
+	                        {% if not payment_account or payment_account.country != 'SK' %}
+	                          <div class="pdf-payment-row value-nowrap">
+	                            <span>{{ invoice_i18n.account_number or 'Číslo účtu' }}</span>
+	                            <span>{% if payment_account %}{{ payment_account.number or payment_account.display or '—' }}{% else %}—{% endif %}</span>
+	                          </div>
+	                        {% endif %}
+	                        <div class="pdf-payment-row">
+	                          <span>{{ invoice_i18n.reference or 'Variabilní symbol' }}</span>
+	                          <span>{{ variable_symbol or '—' }}</span>
+	                        </div>
+	                      {% endif %}
+                    </div>
+                    {% if payment_method == 'bank_transfer' %}
+                      <div class="pdf-payment-col">
+                        {% if payment_account and payment_account.bic %}
+                          <div class="pdf-payment-row value-nowrap">
+                            <span>BIC / SWIFT</span>
+                            <span>{{ payment_account.bic }}</span>
+                          </div>
+                        {% endif %}
+                        {% if payment_account and payment_account.iban %}
+                          <div class="pdf-payment-row value-iban">
+                            <span>IBAN</span>
+                            <span>{{ payment_account.iban_display or payment_account.iban }}</span>
+                          </div>
+                        {% endif %}
+                      </div>
+                    {% endif %}
+                  </div>
+                  {% if payment_method == 'bank_transfer' and payment_qr_codes %}
+                    {% set qr = payment_qr_codes[0] %}
+                    <div class="pdf-qr pdf-payment-qr-inline">
+                      <img src="{{ qr.image_data_uri }}" alt="{{ qr.title }}" />
+                      <div class="pdf-qr-caption">{{ qr.title }}</div>
+                    </div>
+                  {% endif %}
+                </div>
+                {% if payment_method == 'bank_transfer' and not payment_account %}
+                  <div class="pdf-note">{{ invoice_i18n.no_bank_account or 'Na faktuře není vybraný bankovní účet.' }}</div>
+                {% endif %}
+              </section>
+            {% endif %}
+
+            {% if items %}
+              <section class="pdf-items-section">
+                <div class="pdf-items-label">{{ invoice_i18n.item or 'Položka' }}</div>
+                <div class="pdf-items-list">
+                  {% for it in items %}
+                    <div class="pdf-item-row">
+                      <div>
+                        <div class="pdf-item-title">{{ it.description }}</div>
+                        {% if it.quantity or it.unit or it.unit_price_cents or show_vat %}
+                          <div class="pdf-item-meta">
+                            {{ it.quantity | quantity }}{% if it.unit %} {{ it.unit }}{% endif %}
+                            {% if it.unit_price_cents %} x {{ it.unit_price_cents | money(invoice.currency) }}{% endif %}
+                            {% if show_vat %} - DPH {{ it.vat_rate }}%{% endif %}
+                          </div>
+                        {% endif %}
+                      </div>
+                      <div class="pdf-item-total">{{ it.line_total_cents | money(invoice.currency) }}</div>
+                    </div>
+                  {% endfor %}
+                </div>
+              </section>
+            {% endif %}
+
+            <section class="pdf-footer">
+              <div class="pdf-footer-notes">
+                {% if invoice.notes %}
+                  <div class="pdf-note">{{ invoice.notes }}</div>
+                {% endif %}
+                {% if footer_text %}
+                  <div class="pdf-legal-footer">{{ footer_text }}</div>
+                {% endif %}
+                {% if invoice.status == 'paid' %}
+                  <div class="pdf-paid-note">{{ invoice_i18n.paid_notice or 'Tento doklad je již uhrazený. Neplaťte jej prosím znovu.' }}</div>
+                {% endif %}
+              </div>
+
+              <div class="pdf-totals">
+                <div class="pdf-totals-list">
+                  <div class="pdf-totals-row">
+                    <span>{{ invoice_i18n.subtotal or 'Mezisoučet' }}</span>
+                    <span>{{ items_total_cents | money(invoice.currency) }}</span>
+                  </div>
+                  {% if discount_cents and discount_cents != 0 %}
+                    <div class="pdf-totals-row">
+                      <span>{{ invoice_i18n.discount or 'Sleva' }}</span>
+                      <span>{{ (-discount_cents) | money(invoice.currency) }}</span>
+                    </div>
+                  {% endif %}
+                  {% if rounding_adjustment_cents and rounding_adjustment_cents != 0 %}
+                    <div class="pdf-totals-row">
+                      <span>{{ invoice_i18n.rounding or 'Zaokrouhlení' }}</span>
+                      <span>{{ rounding_adjustment_cents | money(invoice.currency) }}</span>
+                    </div>
+                  {% endif %}
+                  <div class="pdf-totals-row total">
+                    <span>{{ invoice_i18n.total or 'Celkem' }}</span>
+                    <span>{{ invoice.total_cents | money(invoice.currency) }}</span>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+        {% else %}
+          <header class="invoice-header">
+            <div>
+              <div class="invoice-kicker">{{ document_kicker or invoice_i18n.document or 'Doklad' }}</div>
+              <h1 class="invoice-title">{{ invoice.number or '—' }}</h1>
+              {% if source_invoice_number %}
+                <div class="invoice-subtitle">{{ invoice_i18n.linked_document or 'Navázaný doklad' }}: {{ source_invoice_number }}</div>
+              {% endif %}
+            </div>
+
+            <section class="summary-card">
+              <div class="summary-label">{{ invoice_i18n.amount_due or 'Celkem k úhradě' }}</div>
+              <div class="summary-amount">{{ invoice.total_cents | money(invoice.currency) }}</div>
+              <div class="summary-status{% if invoice.status == 'cancelled' %} cancelled{% endif %}">{{ status_label or (invoice.status | invoice_status) }}</div>
+            </section>
+          </header>
+
+          <div class="content-grid">
+            <div class="main-column">
+              <div class="party-grid">
+                <section class="party-card">
+                  <div class="card-label">{{ invoice_i18n.seller or 'Dodavatel' }}</div>
+                  <h2 class="party-name">{{ seller.name or '—' }}</h2>
+                  <div class="party-lines">
+                    {% if seller.street or seller.city or seller.zip or seller.country %}
+                      <div class="muted">
+                        {{ seller.street }}<br />
+                        {{ seller.zip }} {{ seller.city }}<br />
+                        {{ seller.country }}
+                      </div>
+                    {% endif %}
+                    {% if seller.ico %}<div>{{ invoice_i18n.ico or 'IČO' }}: {{ seller.ico }}</div>{% endif %}
+                    {% if seller.dic %}<div>{{ invoice_i18n.dic or 'DIČ' }}: {{ seller.dic }}</div>{% endif %}
+                    {% if seller.phone %}<div>{{ seller.phone }}</div>{% endif %}
+                  </div>
+                </section>
+
+                <section class="party-card">
+                  <div class="card-label">{{ invoice_i18n.buyer or 'Odběratel' }}</div>
+                  <h2 class="party-name">{{ buyer.name or '—' }}</h2>
+                  <div class="party-lines">
+                    {% if buyer.street or buyer.city or buyer.zip or buyer.country %}
+                      <div class="muted">
+                        {{ buyer.street }}<br />
+                        {{ buyer.zip }} {{ buyer.city }}<br />
+                        {{ buyer.country }}
+                      </div>
+                    {% endif %}
+                    {% if buyer.ico %}<div>{{ invoice_i18n.ico or 'IČO' }}: {{ buyer.ico }}</div>{% endif %}
+                    {% if buyer.dic %}<div>{{ invoice_i18n.dic or 'DIČ' }}: {{ buyer.dic }}</div>{% endif %}
+                    {% if buyer.phone %}<div>{{ buyer.phone }}</div>{% endif %}
+                  </div>
+                </section>
+              </div>
+
+              <section>
+                <h2 class="section-title">{{ invoice_i18n.line_items or 'Položky dokladu' }}</h2>
+                {% if items %}
+                  <table class="items-table">
+                    <thead>
+                      <tr>
+                        <th>{{ invoice_i18n.description or 'Popis' }}</th>
+                        <th class="num">{{ invoice_i18n.quantity or 'Množství' }}</th>
+                        <th class="num">{{ invoice_i18n.unit_price or 'Jedn. cena' }}</th>
+                        {% if show_vat %}<th class="num">{{ invoice_i18n.vat or 'DPH' }}</th>{% endif %}
+                        <th class="num">{{ invoice_i18n.total or 'Celkem' }}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {% for it in items %}
+                        <tr>
+                          <td data-label="{{ invoice_i18n.description or 'Popis' }}">{{ it.description }}</td>
+                          <td class="num" data-label="{{ invoice_i18n.quantity or 'Množství' }}">{{ it.quantity | quantity }}{% if it.unit %} {{ it.unit }}{% endif %}</td>
+                          <td class="num" data-label="{{ invoice_i18n.unit_price or 'Jedn. cena' }}">{{ it.unit_price_cents | money(invoice.currency) }}</td>
+                          {% if show_vat %}<td class="num" data-label="{{ invoice_i18n.vat or 'DPH' }}">{{ it.vat_rate }}%</td>{% endif %}
+                          <td class="num" data-label="{{ invoice_i18n.total or 'Celkem' }}">{{ it.line_total_cents | money(invoice.currency) }}</td>
+                        </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+
+                  <div class="totals-card">
+                    <div class="totals-list">
+                      <div class="totals-row">
+                        <span>{{ invoice_i18n.subtotal or 'Mezisoučet' }}</span>
+                        <span>{{ items_total_cents | money(invoice.currency) }}</span>
+                      </div>
+                      {% if discount_cents and discount_cents != 0 %}
+                        <div class="totals-row">
+                          <span>{{ invoice_i18n.discount or 'Sleva' }}</span>
+                          <span>{{ (-discount_cents) | money(invoice.currency) }}</span>
+                        </div>
+                      {% endif %}
+                      {% if rounding_adjustment_cents and rounding_adjustment_cents != 0 %}
+                        <div class="totals-row">
+                          <span>{{ invoice_i18n.rounding or 'Zaokrouhlení' }}</span>
+                          <span>{{ rounding_adjustment_cents | money(invoice.currency) }}</span>
+                        </div>
+                      {% endif %}
+                      <div class="totals-row total">
+                        <span>{{ invoice_i18n.total or 'Celkem' }}</span>
+                        <span>
+                          {{ invoice.total_cents | money(invoice.currency) }}
+                          {% if public_mode and not pdf_mode %}
+                            <button class="public-copy-button" type="button" data-public-copy-value="{{ invoice.total_cents | money(invoice.currency) }}" data-public-copy-label="Kopírovat částku" aria-label="Kopírovat částku" title="Kopírovat částku"><i class="ti ti-copy" aria-hidden="true"></i><i class="ti ti-check" aria-hidden="true"></i><span class="sr-only">Kopírovat částku</span></button>
+                          {% endif %}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                {% else %}
+                  <p class="muted">{{ invoice_i18n.no_items or 'Bez položek.' }}</p>
+                {% endif %}
+              </section>
+
+              {% if invoice.notes %}
+                <section class="note-card">
+                  <div class="card-label">{{ invoice_i18n.note or 'Poznámka' }}</div>
+                  {{ invoice.notes }}
+                </section>
+              {% endif %}
+            </div>
+
+            <aside class="side-column">
+              <section class="meta-card">
+                <div class="card-label">{{ invoice_i18n.overview or 'Přehled' }}</div>
+                <div class="meta-list">
+                  <div class="meta-row">
+                    <span>{{ invoice_i18n.issue_date or 'Datum vystavení' }}</span>
+                    <span>{{ invoice.issue_date }}</span>
+                  </div>
+                  {% if is_vat_payer %}
+                    <div class="meta-row">
+                      <span>{{ invoice_i18n.taxable_supply_date or 'DUZP' }}</span>
+                      <span>{{ taxable_supply_date or invoice.issue_date }}</span>
+                    </div>
+                  {% endif %}
+                  <div class="meta-row">
+                    <span>{{ invoice_i18n.due_date or 'Datum splatnosti' }}</span>
+                    <span>{{ invoice.due_date }}</span>
+                  </div>
+                  <div class="meta-row">
+                    <span>{{ invoice_i18n.status or 'Stav' }}</span>
+                    <span>{{ status_label or (invoice.status | invoice_status) }}</span>
+                  </div>
+                  {% if invoice.paid_on %}
+                    <div class="meta-row">
+                      <span>{{ invoice_i18n.paid_on or "Uhrazeno" }}</span>
+                      <span>{{ invoice.paid_on }}</span>
+                    </div>
+                  {% endif %}
+                  <div class="meta-row">
+                    <span>{{ invoice_i18n.currency or 'Měna' }}</span>
+                    <span>{{ invoice.currency }}</span>
+                  </div>
+                </div>
+              </section>
+
+              <section class="payment-card">
+                <div class="card-label">{{ invoice_i18n.payment or 'Platba' }}</div>
+                <div class="payment-primary">{{ payment_method_label or (payment_method | invoice_payment_method) }}</div>
+	                {% if payment_method == 'bank_transfer' and payment_account %}
+	                  <div class="payment-list">
+	                    {% if payment_account.country != 'SK' %}
+	                      <div class="payment-row value-nowrap">
+	                        <span>{{ invoice_i18n.account_number or 'Číslo účtu' }}</span>
+	                        <span>{{ payment_account.number or payment_account.display or '—' }}</span>
+	                        {% if public_mode and not pdf_mode and (payment_account.number or payment_account.display) %}
+	                          <button class="public-copy-button" type="button" data-public-copy-value="{{ payment_account.number or payment_account.display }}" data-public-copy-label="Kopírovat účet" aria-label="Kopírovat účet" title="Kopírovat účet"><i class="ti ti-copy" aria-hidden="true"></i><i class="ti ti-check" aria-hidden="true"></i><span class="sr-only">Kopírovat účet</span></button>
+	                        {% endif %}
+	                      </div>
+	                    {% endif %}
+	                    <div class="payment-row value-nowrap">
+	                      <span>{{ invoice_i18n.reference or 'Variabilní symbol' }}</span>
+	                      <span>{{ variable_symbol or '—' }}</span>
+                      {% if public_mode and not pdf_mode and variable_symbol %}
+                        <button class="public-copy-button" type="button" data-public-copy-value="{{ variable_symbol }}" data-public-copy-label="Kopírovat VS" aria-label="Kopírovat VS" title="Kopírovat VS"><i class="ti ti-copy" aria-hidden="true"></i><i class="ti ti-check" aria-hidden="true"></i><span class="sr-only">Kopírovat VS</span></button>
+                      {% endif %}
+                    </div>
+                    {% if payment_account.bic %}
+                      <div class="payment-row">
+                        <span>BIC / SWIFT</span>
+                        <span>{{ payment_account.bic }}</span>
+                        {% if public_mode and not pdf_mode %}
+                          <button class="public-copy-button" type="button" data-public-copy-value="{{ payment_account.bic }}" data-public-copy-label="Kopírovat BIC" aria-label="Kopírovat BIC" title="Kopírovat BIC"><i class="ti ti-copy" aria-hidden="true"></i><i class="ti ti-check" aria-hidden="true"></i><span class="sr-only">Kopírovat BIC</span></button>
+                        {% endif %}
+                      </div>
+                    {% endif %}
+                    {% if payment_account.iban %}
+                      <div class="payment-row value-nowrap value-iban">
+                        <span>IBAN</span>
+                        <span>{{ payment_account.iban_display or payment_account.iban }}</span>
+                        {% if public_mode and not pdf_mode %}
+                          <button class="public-copy-button" type="button" data-public-copy-value="{{ payment_account.iban }}" data-public-copy-label="Kopírovat IBAN" aria-label="Kopírovat IBAN" title="Kopírovat IBAN"><i class="ti ti-copy" aria-hidden="true"></i><i class="ti ti-check" aria-hidden="true"></i><span class="sr-only">Kopírovat IBAN</span></button>
+                        {% endif %}
+                      </div>
+                    {% endif %}
+                  </div>
+
+                  {% if payment_qr_codes %}
+                    <div class="qr-grid">
+                      {% for qr in payment_qr_codes %}
+                        <div class="qr-card">
+                          <h4>{{ qr.title }}</h4>
+                          <img src="{{ qr.image_data_uri }}" alt="{{ qr.title }}" />
+                        </div>
+                      {% endfor %}
+                    </div>
+                  {% endif %}
+                {% elif payment_method == 'bank_transfer' %}
+                  <p class="muted">{{ invoice_i18n.no_bank_account or 'Na faktuře není vybraný bankovní účet.' }}</p>
+                {% endif %}
+              </section>
+
+              {% if footer_text and not public_mode %}
+                <section class="note-card">
+                  <div class="card-label">{{ invoice_i18n.footer or 'Patička' }}</div>
+                  {{ footer_text }}
+                </section>
+              {% endif %}
+            </aside>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+    {% if public_mode and not pdf_mode %}
+      <script>
+        (function () {
+          var storageKey = 'fakturek-public-invoice-theme';
+          var toggle = document.querySelector('[data-public-invoice-theme-toggle]');
+          function normalize(theme) {
+            return theme === 'dark' ? 'dark' : 'light';
+          }
+          function applyTheme(theme) {
+            var nextTheme = normalize(theme);
+            document.documentElement.setAttribute('data-public-invoice-theme', nextTheme);
+            if (toggle) {
+              toggle.setAttribute('aria-label', nextTheme === 'dark' ? 'Přepnout na světlý režim' : 'Přepnout na tmavý režim');
+              toggle.setAttribute('title', nextTheme === 'dark' ? 'Přepnout na světlý režim' : 'Přepnout na tmavý režim');
+            }
+            try {
+              window.localStorage.setItem(storageKey, nextTheme);
+            } catch (error) {}
+          }
+          var currentTheme = normalize(document.documentElement.getAttribute('data-public-invoice-theme'));
+          if (toggle) {
+            toggle.addEventListener('click', function () {
+              applyTheme(normalize(document.documentElement.getAttribute('data-public-invoice-theme')) === 'dark' ? 'light' : 'dark');
+            });
+          }
+          document.addEventListener('click', function (event) {
+            var target = event.target;
+            if (!target || !target.closest) return;
+            var button = target.closest('[data-public-copy-value]');
+            if (!button) return;
+            event.preventDefault();
+            var value = button.getAttribute('data-public-copy-value') || '';
+            if (!value) return;
+            var original = button.getAttribute('data-public-copy-label') || button.getAttribute('aria-label') || 'Kopírovat';
+            var done = function () {
+              button.classList.add('is-copied');
+              button.setAttribute('aria-label', 'Zkopírováno');
+              button.setAttribute('title', 'Zkopírováno');
+              window.setTimeout(function () {
+                button.classList.remove('is-copied');
+                button.setAttribute('aria-label', original);
+                button.setAttribute('title', original);
+              }, 1400);
+            };
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(value).then(done).catch(done);
+            } else {
+              done();
+            }
+          });
+          applyTheme(currentTheme);
+        })();
+      </script>
+    {% endif %}
+  </body>
+</html>

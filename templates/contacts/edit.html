@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+
+{% block title %}Upravit kontakt – fakturek{% endblock %}
+
+{% block content %}
+  <p><a href="/contacts/{{ contact.id }}">← Zpět na detail</a></p>
+
+  <h1>Upravit kontakt</h1>
+
+  {% if error %}
+    <p><strong>Chyba:</strong> {{ error }}</p>
+  {% endif %}
+
+  {% if info %}
+    <p><strong>Info:</strong> {{ info }}</p>
+  {% endif %}
+
+  <form method="post" action="/contacts/{{ contact.id }}/edit" class="form">
+    {{ csrf_input(request)|safe }}
+    <div class="form-row">
+      <label for="name">Jméno / firma</label>
+      <input id="name" name="name" required value="{{ prefill.name }}" />
+    </div>
+
+    <div class="form-row">
+      <label for="email">E-mail(y)</label>
+      <input id="email" name="email" value="{{ prefill.email }}" />
+      <div class="muted">Můžeš zadat více adres oddělených čárkou nebo středníkem.</div>
+    </div>
+
+    <div class="form-row">
+      <label for="phone">Telefon</label>
+      <input id="phone" name="phone" value="{{ prefill.phone }}" />
+    </div>
+
+    <div class="form-row">
+      <label for="street">Ulice</label>
+      <input id="street" name="street" value="{{ prefill.street }}" />
+    </div>
+
+    <div class="form-row">
+      <label for="city">Město</label>
+      <input id="city" name="city" value="{{ prefill.city }}" />
+    </div>
+
+    <div class="form-row">
+      <label for="zip">PSČ</label>
+      <input id="zip" name="zip" value="{{ prefill.zip }}" />
+    </div>
+
+    <div class="form-row">
+      <label for="country">Země</label>
+      <select id="country" name="country">
+        <optgroup label="Nejčastější">
+          {% for code, label in country_options_top %}
+            <option value="{{ code }}" {% if selected_country == code %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </optgroup>
+        <optgroup label="Všechny země">
+          {% for code, label in country_options_rest %}
+            <option value="{{ code }}" {% if selected_country == code %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </optgroup>
+      </select>
+    </div>
+
+    <div class="form-row">
+      <label for="ico">IČO</label>
+      <input id="ico" name="ico" value="{{ prefill.ico }}" />
+    </div>
+
+    <div class="form-row">
+      <label for="dic">DIČ</label>
+      <input id="dic" name="dic" value="{{ prefill.dic }}" />
+    </div>
+
+    <div class="form-row">
+      <label>
+        <input type="checkbox" name="registry_auto_update" value="1" {% if prefill.registry_auto_update is not defined or prefill.registry_auto_update %}checked{% endif %} />
+        Pravidelně aktualizovat údaje z ARES/RPO
+      </label>
+      <div class="muted">Když firma změní název, adresu nebo DIČ v registru, Fakturek to při kontrole převezme. U konkrétního kontaktu to můžeš vypnout.</div>
+    </div>
+
+    <div class="form-row">
+      <label for="fixed_variable_symbol">Pevný variabilní symbol</label>
+      <input id="fixed_variable_symbol" name="fixed_variable_symbol" inputmode="numeric" maxlength="10" value="{{ prefill.fixed_variable_symbol }}" />
+      <div class="muted">Volitelné. Pokud ho vyplníš, nové faktury pro tento kontakt ho použijí automaticky.</div>
+    </div>
+
+    <div class="form-actions">
+      <button class="btn" type="submit" formmethod="get" formnovalidate name="lookup" value="ares">Načíst z ARES</button>
+      <button class="btn" type="submit" formmethod="get" formnovalidate name="lookup" value="rpo">Načíst z RPO (SK)</button>
+      <button class="btn primary" type="submit">Uložit změny</button>
+      <a class="btn" href="/contacts/{{ contact.id }}">Zpět</a>
+    </div>
+  </form>
+
+  <hr />
+
+  <form method="post" action="/contacts/{{ contact.id }}/delete" style="display:inline">
+    {{ csrf_input(request)|safe }}
+    <button class="btn" type="submit" onclick="return confirm('Opravdu smazat kontakt?')">Smazat kontakt</button>
+  </form>
+{% endblock %}

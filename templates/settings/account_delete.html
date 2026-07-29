@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+
+{% block title %}Zrušení účtu – fakturek{% endblock %}
+
+{% block content %}
+  <section class="page-head">
+    <p class="dashboard-eyebrow">Účet</p>
+    <h1>Zrušení účtu</h1>
+    <p class="muted">Zrušení účtu deaktivuje přihlášení a naplánuje bezpečné smazání. Vystavené doklady nemažeme okamžitě bez retenční lhůty.</p>
+  </section>
+
+  {% if error %}
+    <div class="card settings-notice settings-notice-error">
+      <strong>Chyba:</strong> {{ error }}
+    </div>
+  {% endif %}
+
+  <section class="card account-delete-card">
+    <div class="settings-card-head">
+      <div>
+        <p class="dashboard-eyebrow">Dopad</p>
+        <h2>Co se stane po potvrzení</h2>
+      </div>
+    </div>
+
+    <div class="settings-summary-grid account-delete-summary">
+      <div class="settings-summary-item">
+        <span>Subjekty s přístupem</span>
+        <strong>{{ summary.subject_count }}</strong>
+      </div>
+      <div class="settings-summary-item">
+        <span>Subjekty bez jiného vlastníka</span>
+        <strong>{{ summary.sole_owned_subject_count }}</strong>
+      </div>
+      <div class="settings-summary-item">
+        <span>Faktury a doklady</span>
+        <strong>{{ summary.invoice_count }}</strong>
+      </div>
+      <div class="settings-summary-item">
+        <span>Vystavené doklady</span>
+        <strong>{{ summary.issued_invoice_count }}</strong>
+      </div>
+      <div class="settings-summary-item">
+        <span>Aktivní API klíče</span>
+        <strong>{{ summary.api_token_count }}</strong>
+      </div>
+      <div class="settings-summary-item">
+        <span>Hard-delete nejdřív</span>
+        <strong>za 14 dní</strong>
+      </div>
+    </div>
+
+    <div class="account-delete-warning">
+      <p><strong>Po potvrzení se účet hned deaktivuje.</strong></p>
+      <p>API klíče se zneplatní a bankovní párování se vypne u subjektů, kde jsi jediný vlastník. Pokud má subjekt dalšího vlastníka, subjekt ani data ostatních uživatelů se neruší.</p>
+    </div>
+
+    {% if deletion_pending %}
+      <div class="notice warning">
+        <p>Tenhle účet už čeká na smazání.</p>
+      </div>
+    {% else %}
+      <form method="post" action="/settings/account/delete" class="form account-delete-form">
+        {{ csrf_input(request)|safe }}
+        <div class="form-row">
+          <label for="delete_password">Heslo</label>
+          <input id="delete_password" name="password" type="password" autocomplete="current-password" required />
+        </div>
+        <div class="form-row">
+          <label for="delete_confirmation">Potvrzení</label>
+          <input id="delete_confirmation" name="confirmation" autocomplete="off" placeholder="{{ confirmation_phrase }}" required />
+          <small class="muted">Opiš přesně: <code>{{ confirmation_phrase }}</code></small>
+        </div>
+        <div class="form-row">
+          <label for="delete_reason">Důvod / poznámka</label>
+          <textarea id="delete_reason" name="reason" rows="3" placeholder="Volitelné"></textarea>
+        </div>
+        <div class="form-actions">
+          <a class="btn" href="/settings#account-delete">Zpět do nastavení</a>
+          <button class="btn danger" type="submit">Zrušit účet</button>
+        </div>
+      </form>
+    {% endif %}
+  </section>
+{% endblock %}

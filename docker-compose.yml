@@ -1,0 +1,51 @@
+services:
+  app:
+    build:
+      context: .
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: mysql+pymysql://${MARIADB_USER:?set MARIADB_USER}:${MARIADB_PASSWORD:?set MARIADB_PASSWORD}@db:3306/${MARIADB_DATABASE:?set MARIADB_DATABASE}?charset=utf8mb4
+      PDF_STORAGE_DIR: /app/var/pdfs
+      IMPORT_STORAGE_DIR: /app/var/imports
+      FAKTUREK_LOG_DIR: /app/var/logs
+    ports:
+      - "127.0.0.1:${APP_PORT:-8000}:8000"
+    volumes:
+      - app_data:/app/var
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["/app/docker-entrypoint.sh"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  db:
+    image: mariadb:10.11.14
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?set MARIADB_ROOT_PASSWORD}
+      MARIADB_DATABASE: ${MARIADB_DATABASE:?set MARIADB_DATABASE}
+      MARIADB_USER: ${MARIADB_USER:?set MARIADB_USER}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD:?set MARIADB_PASSWORD}
+    volumes:
+      - db_data:/var/lib/mysql
+    command:
+      - "--character-set-server=utf8mb4"
+      - "--collation-server=utf8mb4_unicode_ci"
+    healthcheck:
+      test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -u$$MARIADB_USER -p$$MARIADB_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+volumes:
+  app_data:
+  db_data:

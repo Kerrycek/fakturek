@@ -1,0 +1,253 @@
+{% extends "base.html" %}
+
+{% block title %}Statistiky – fakturek{% endblock %}
+
+{% block content %}
+  <section class="stack-lg">
+    <div class="page-header">
+      <div class="page-header-copy">
+        <p class="page-kicker">Statistiky</p>
+        <h1>Statistiky</h1>
+        <p>Přehled fakturace po rocích a měsících. Měna grafů je <strong>{{ chart_currency or "CZK" }}</strong>.</p>
+      </div>
+    </div>
+
+    {% if not db_enabled %}
+      <div class="card stack-sm">
+        <p><strong>Statistiky nejsou v tomto prostředí dostupné.</strong></p>
+        <p>
+          DB je vypnutá nebo chybí závislosti.
+          {% if db_error %}
+            <br />
+            <small>{{ db_error }}</small>
+          {% endif %}
+        </p>
+      </div>
+    {% else %}
+      <section class="card stats-shell stack-md">
+        <div class="dashboard-section-head">
+          <div>
+            <p class="page-kicker">Roky</p>
+            <h2>Vyber rok</h2>
+          </div>
+        </div>
+        {% if is_vat_payer %}
+          <div class="stats-year-tabs">
+            <a class="btn {% if vat_view == 'gross' %}primary{% endif %}" href="/stats?year={{ selected_year }}&vat_view=gross">Včetně DPH</a>
+            <a class="btn {% if vat_view == 'net' %}primary{% endif %}" href="/stats?year={{ selected_year }}&vat_view=net">Bez DPH</a>
+            <a class="btn {% if vat_view == 'vat' %}primary{% endif %}" href="/stats?year={{ selected_year }}&vat_view=vat">Pouze DPH</a>
+          </div>
+        {% endif %}
+        <div class="stats-year-tabs">
+          {% for year in available_years %}
+            <a class="btn {% if year == selected_year %}primary{% endif %}" href="/stats?year={{ year }}&vat_view={{ vat_view }}">{{ year }}</a>
+          {% endfor %}
+        </div>
+      </section>
+
+      <section class="stats-summary-grid">
+        <div class="card stats-summary-card">
+          <span>Aktivní rok</span>
+          <strong>{{ selected_year }}</strong>
+        </div>
+        <div class="card stats-summary-card">
+          <span>Vyfakturováno {{ vat_view_label }} v {{ chart_currency }}</span>
+          <strong>{{ selected_year_total_cents | money(chart_currency) }}</strong>
+        </div>
+        <div class="card stats-summary-card">
+          <span>Vystavené faktury</span>
+          <strong>{{ selected_year_invoice_count }}</strong>
+        </div>
+        <div class="card stats-summary-card">
+          <span>Po splatnosti teď</span>
+          <strong>{{ overdue_count }}</strong>
+        </div>
+      </section>
+
+      <section class="card stats-shell stack-md">
+        <div class="dashboard-section-head">
+          <div>
+            <p class="page-kicker">Posledních 12 měsíců</p>
+            <h2>Rolling přehled a cashflow</h2>
+            <p>Jen skutečné nezrušené faktury. Vyfakturováno se počítá podle data vystavení, zaplaceno podle data úhrady.</p>
+          </div>
+        </div>
+        <section class="stats-summary-grid stats-summary-grid-rolling">
+          <div class="card stats-summary-card stats-summary-card-period">
+            <span>Období</span>
+            <strong>{{ trailing_twelve_months.window_start }} – {{ trailing_twelve_months.window_end }}</strong>
+          </div>
+          <div class="card stats-summary-card">
+            <span>Vyfakturováno {{ vat_view_label }}</span>
+            <strong>{{ trailing_twelve_months.total_invoiced_cents | money(chart_currency) }}</strong>
+          </div>
+          <div class="card stats-summary-card">
+            <span>Zaplaceno</span>
+            <strong>{{ trailing_twelve_months.total_paid_cents | money(chart_currency) }}</strong>
+          </div>
+          <div class="card stats-summary-card">
+            <span>Platné faktury / uhrazené</span>
+            <strong>{{ trailing_twelve_months.invoice_count }} / {{ trailing_twelve_months.paid_count }}</strong>
+          </div>
+        </section>
+        {% if trailing_twelve_months.rows %}
+          <div class="stats-rolling-rows">
+            {% for item in trailing_twelve_months.rows %}
+              <div class="stats-rolling-row">
+                <div class="stats-rolling-month">
+                  <strong>{{ item.short_label }}</strong>
+                  <span>{{ item.invoice_count }} faktur{% if item.paid_count %} · {{ item.paid_count }} uhrazeno{% endif %}</span>
+                </div>
+                <div class="stats-rolling-metric stats-rolling-metric-card">
+                  <span>Vyfakturováno {{ vat_view_label }}</span>
+                  <div class="stats-rolling-track">
+                    <span class="stats-rolling-fill stats-rolling-fill-invoiced" style="width: {{ item.invoiced_bar_percent }}%"></span>
+                  </div>
+                  <strong>{{ item.invoiced_cents | money(chart_currency) }}</strong>
+                </div>
+                <div class="stats-rolling-metric stats-rolling-metric-card">
+                  <span>Zaplaceno</span>
+                  <div class="stats-rolling-track">
+                    <span class="stats-rolling-fill stats-rolling-fill-paid" style="width: {{ item.paid_bar_percent }}%"></span>
+                  </div>
+                  <strong>{{ item.paid_cents | money(chart_currency) }}</strong>
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="empty-state">Za posledních 12 měsíců tu zatím nejsou žádné platné faktury.</div>
+        {% endif %}
+      </section>
+
+      <section class="stats-layout">
+        <section class="card stats-panel stack-md">
+          <div class="page-header-copy">
+            <p class="page-kicker">Roky</p>
+            <h2>Vývoj po letech</h2>
+            <p>Rychlý pohled na to, v jakých letech jsi fakturoval nejvíc.</p>
+          </div>
+          {% if yearly_revenue %}
+            <div class="stats-bars">
+              {% for item in yearly_revenue %}
+                <a class="stats-bar-row {% if item.selected %}is-selected{% endif %}" href="/stats?year={{ item.year }}&vat_view={{ vat_view }}">
+                  <div class="stats-bar-meta">
+                    <strong>{{ item.year }}</strong>
+                    <span>{{ item.invoice_count }} faktur</span>
+                  </div>
+                  <div class="stats-bar-track">
+                    <span class="stats-bar-fill" style="width: {{ item.bar_percent }}%"></span>
+                  </div>
+                  <div class="stats-bar-value">{{ item.total_cents | money(chart_currency) }}</div>
+                </a>
+              {% endfor %}
+            </div>
+          {% else %}
+            <div class="empty-state">Zatím tu nejsou data pro roční přehled.</div>
+          {% endif %}
+        </section>
+
+        <section class="card stats-panel stack-md">
+          <div class="page-header-copy">
+            <p class="page-kicker">Měsíce</p>
+            <h2>{{ selected_year }} po měsících</h2>
+            <p>Každý řádek ukazuje vyfakturovanou částku {{ vat_view_label }} v měně {{ chart_currency }}.</p>
+          </div>
+          {% if monthly_revenue %}
+            <div class="stats-month-list">
+              {% for item in monthly_revenue %}
+                <div class="stats-month-row">
+                  <div class="stats-month-row-head">
+                    <strong>{{ item.label }}</strong>
+                    <span class="stats-month-value">{{ item.total_cents | money(chart_currency) }}</span>
+                  </div>
+                  <div class="stats-month-track">
+                    <span class="stats-month-fill" style="width: {{ item.bar_percent }}%"></span>
+                  </div>
+                </div>
+              {% endfor %}
+            </div>
+          {% else %}
+            <div class="empty-state">Pro vybraný rok tu zatím nejsou žádné vystavené faktury.</div>
+          {% endif %}
+        </section>
+      </section>
+
+      <section class="stats-layout">
+        <section class="card stats-panel stack-md">
+          <div class="page-header-copy">
+            <p class="page-kicker">Měny</p>
+            <h2>Součty za rok {{ selected_year }}</h2>
+          </div>
+          {% if totals_by_currency %}
+            <div class="table-wrap">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>Měna</th>
+                    <th>Celkem</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for cur, total in totals_by_currency %}
+                    <tr>
+                      <td>{{ cur }}</td>
+                      <td>{{ total | money(cur) }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            {% if foreign_currency_invoice_count %}
+              <p class="muted">Mimo hlavní měnu je v tomto roce ještě {{ foreign_currency_invoice_count }} faktur.</p>
+            {% endif %}
+          {% else %}
+            <div class="empty-state">Pro vybraný rok tu zatím nejsou žádné částky.</div>
+          {% endif %}
+        </section>
+
+        <section class="card stats-panel stack-md">
+          <div class="page-header-copy">
+            <p class="page-kicker">Workflow</p>
+            <h2>Stavy faktur za rok {{ selected_year }}</h2>
+          </div>
+          {% if invoices_by_status %}
+            <div class="table-wrap">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>Stav</th>
+                    <th>Počet</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for status, cnt in invoices_by_status %}
+                    <tr>
+                      <td>{{ status | invoice_status }}</td>
+                      <td>{{ cnt }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <div class="empty-state">Pro vybraný rok tu zatím nejsou žádné faktury.</div>
+          {% endif %}
+        </section>
+      </section>
+
+      <section class="card stats-shell stats-foot-summary stack-md">
+        <div class="info-grid stats-foot-summary-grid">
+          <div class="info-pair">
+            <span>Kontakty</span>
+            <strong>{{ contacts_count }}</strong>
+          </div>
+          <div class="info-pair">
+            <span>Faktury celkem</span>
+            <strong>{{ invoices_count }}</strong>
+          </div>
+        </div>
+      </section>
+    {% endif %}
+  </section>
+{% endblock %}

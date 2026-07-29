@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block title %}Nemáš oprávnění – fakturek{% endblock %}
+
+{% block content %}
+  <section class="page-header access-denied-page">
+    <div class="page-header-copy">
+      <p class="page-kicker">Oprávnění</p>
+      <h1>Na tuhle akci nemáš práva</h1>
+      <p>
+        U aktuálního IČO máš přístup jen k části Fakturku. Pro tuto akci je potřeba oprávnění
+        <strong>{{ required_label }}</strong>.
+      </p>
+    </div>
+    <div class="page-header-actions">
+      <a class="btn" href="/invoices">Zpět na faktury</a>
+      <a class="btn primary" href="/imports">Exporty</a>
+    </div>
+  </section>
+
+  <section class="card access-denied-card">
+    <div class="access-denied-mark" aria-hidden="true">!</div>
+    <div class="access-denied-copy">
+      {% if required == "can_issue" %}
+        <h2>Vystavování dokladů je vypnuté</h2>
+        <p>
+          Můžeš prohlížet uložené doklady a připravit exporty pro účetnictví, ale nové faktury,
+          nabídky, zálohovky ani dobropisy za tenhle subjekt nevystavíš.
+        </p>
+      {% elif required == "can_edit" %}
+        <h2>Úpravy jsou zamčené</h2>
+        <p>
+          Tahle role nemůže měnit kontakty, fakturační údaje, bankovní účty ani další nastavení subjektu.
+          Data zůstanou chráněná před nechtěnou změnou.
+        </p>
+      {% else %}
+        <h2>Přístup k téhle části není povolený</h2>
+        <p>
+          Pokud tu potřebuješ pracovat, požádej vlastníka subjektu, aby ti rozšířil oprávnění v nastavení.
+        </p>
+      {% endif %}
+
+      <div class="access-denied-actions">
+        <a class="btn primary" href="/invoices">Prohlížet faktury</a>
+        <a class="btn" href="/imports">Přejít na export/import</a>
+        <a class="btn subtle" href="/">Přehled</a>
+      </div>
+    </div>
+  </section>
+{% endblock %}

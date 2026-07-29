@@ -1,0 +1,33 @@
+{% macro invoice_action_bar(label, title, subtitle=None, chips=None, screen_only=False, extra_class='') -%}
+  <div class="invoice-action-bar{% if screen_only %} screen-only{% endif %}{% if extra_class %} {{ extra_class }}{% endif %}">
+    <div class="invoice-action-bar-head">
+      <div class="invoice-action-bar-meta">
+        <div class="invoice-action-bar-label">{{ label }}</div>
+        <div class="invoice-action-bar-title">{{ title or 'Faktura' }}</div>
+        {% if subtitle %}
+          <div class="invoice-action-bar-subtitle">{{ subtitle }}</div>
+        {% endif %}
+        {% if chips %}
+          <div class="invoice-action-bar-chips">
+            {% for chip in chips if chip %}
+              <span class="invoice-action-chip">{{ chip }}</span>
+            {% endfor %}
+          </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="invoice-action-bar-sections">
+      {{ caller() }}
+    </div>
+  </div>
+{%- endmacro %}
+
+{% macro action_section(label, extra_class='') -%}
+  <div class="invoice-action-section{% if extra_class %} {{ extra_class }}{% endif %}">
+    <div class="invoice-action-section-label">{{ label }}</div>
+    <div class="invoice-action-section-buttons">
+      {{ caller() }}
+    </div>
+  </div>
+{%- endmacro %}

@@ -1,0 +1,221 @@
+{% extends "base.html" %}
+
+{% block title %}Přehled | fakturek{% endblock %}
+
+{% block content %}
+  <section class="dashboard-grid">
+    <div class="card dashboard-hero">
+      <div>
+        <p class="dashboard-eyebrow">Přehled</p>
+        <h1>Fakturek</h1>
+      </div>
+
+      <div class="dashboard-actions">
+        <a class="btn primary" href="/invoices/new">Nová faktura</a>
+        <a class="btn" href="/invoices">Faktury</a>
+        <a class="btn" href="/contacts">Kontakty</a>
+        <a class="btn" href="/stats">Statistiky</a>
+      </div>
+    </div>
+
+    <section class="card dashboard-recent">
+      <div class="dashboard-section-head">
+        <div>
+          <p class="dashboard-eyebrow">Poslední doklady</p>
+          <h2>Naposledy vystavené</h2>
+        </div>
+        <a class="btn" href="/invoices">Všechny doklady</a>
+      </div>
+
+      {% if recent_invoices %}
+        <div class="dashboard-invoice-list">
+          {% for invoice in recent_invoices %}
+            <a class="dashboard-invoice-row" href="/invoices/{{ invoice.id }}">
+              <div class="dashboard-invoice-main">
+                <strong>{{ invoice.number }}</strong>
+                <span>
+                  {{ invoice.contact_name or "Bez odběratele" }}
+                  ·
+                  {% if (invoice.document_type or 'invoice') == 'quote' %}
+                    Nabídka
+                  {% elif (invoice.document_type or 'invoice') == 'proforma' %}
+                    Zálohová faktura
+                  {% elif (invoice.document_type or 'invoice') == 'credit_note' %}
+                    Dobropis
+                  {% else %}
+                    Faktura
+                  {% endif %}
+                </span>
+              </div>
+              <div class="dashboard-invoice-meta" aria-label="Souhrn dokladu">
+                <span class="badge dashboard-invoice-status">{{ invoice.status | invoice_status }}</span>
+                <span class="dashboard-invoice-date">{{ invoice.issue_date }}</span>
+                <strong class="dashboard-invoice-total">{{ invoice.total_cents | money(invoice.currency) }}</strong>
+              </div>
+            </a>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="empty-state">Zatím tu nejsou žádné vystavené doklady.</div>
+      {% endif %}
+    </section>
+
+    <section class="card stack-md">
+      <div class="dashboard-section-head">
+        <div>
+          <p class="dashboard-eyebrow">Teď důležité</p>
+          <h2>Co si pohlídat</h2>
+        </div>
+        <a class="btn" href="/invoices?status=issued">Otevřít vystavené</a>
+      </div>
+      <div class="info-grid dashboard-info-grid">
+        <div class="info-pair">
+          <span>Otevřené doklady</span>
+          <strong>{{ outstanding_summary.open_count }}</strong>
+        </div>
+        <div class="info-pair">
+          <span>Po splatnosti</span>
+          <strong>{{ outstanding_summary.overdue_count }}</strong>
+        </div>
+        <div class="info-pair">
+          <span>Objem otevřených</span>
+          <strong>{{ outstanding_summary.open_total_cents | money(outstanding_summary.currency) }}</strong>
+        </div>
+      </div>
+    </section>
+
+    {% if top_clients %}
+      <section class="card stack-md">
+        <div class="dashboard-section-head">
+          <div>
+            <p class="dashboard-eyebrow">Klienti</p>
+            <h2>Nejsilnější letos</h2>
+          </div>
+          <a class="btn" href="/stats">Ve statistikách</a>
+        </div>
+        <div class="stack-sm dashboard-client-list">
+          {% for client in top_clients %}
+            <div class="info-grid dashboard-info-grid">
+              <div class="info-pair">
+                <span>{{ client.name }}</span>
+                <strong>{{ client.invoice_count }} dokladů</strong>
+              </div>
+              <div class="info-pair">
+                <span>Celkem</span>
+                <strong>{{ client.total_cents | money(client.currency) }}</strong>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      </section>
+    {% endif %}
+
+    {% if yearly_revenue_overview %}
+      <section class="card stats-shell stack-md">
+        <div class="dashboard-section-head">
+          <div>
+            <p class="dashboard-eyebrow">Roční výkon</p>
+            <h2>Rychlé srovnání roků</h2>
+          </div>
+          <a class="btn" href="/stats?year={{ yearly_revenue_overview[0].year }}">Otevřít statistiky</a>
+        </div>
+        <div class="stats-bars stats-bars-compact">
+          {% for item in yearly_revenue_overview %}
+            <a class="stats-bar-row {% if item.selected %}is-selected{% endif %}" href="/stats?year={{ item.year }}">
+              <div class="stats-bar-meta">
+                <strong>{{ item.year }}</strong>
+                <span>{{ item.invoice_count }} faktur</span>
+              </div>
+              <div class="stats-bar-track">
+                <span class="stats-bar-fill" style="width: {{ item.bar_percent }}%"></span>
+              </div>
+              <div class="stats-bar-value">{{ item.total_cents | money(chart_currency) }}</div>
+            </a>
+          {% endfor %}
+        </div>
+      </section>
+    {% endif %}
+
+    {% if flat_tax_limit %}
+      <section class="card vat-card stack-md">
+        <div class="dashboard-section-head">
+          <div class="stack-sm">
+            <p class="dashboard-eyebrow">Paušální režim {{ flat_tax_limit.year }}</p>
+            <h2>{{ flat_tax_limit.turnover_czk_cents | money("CZK") }}</h2>
+            <p class="muted">Orientační příjmy z vystavených faktur v CZK za aktuální kalendářní rok.</p>
+          </div>
+          <span class="vat-badge vat-badge-{{ flat_tax_limit.status }}">{{ flat_tax_limit.badge_label }}</span>
+        </div>
+
+        <div class="vat-meta">
+          <span>Zvolené pásmo: <strong>{{ flat_tax_limit.band }}. pásmo</strong></span>
+          <span>Profil příjmů: <strong>{{ flat_tax_limit.income_profile_note }}</strong></span>
+        </div>
+
+        <div class="vat-threshold-list">
+          {% for threshold in flat_tax_limit.thresholds %}
+            <article class="vat-threshold {% if threshold.reached %}is-reached{% endif %}">
+              <div class="vat-threshold-labels">
+                <span>{{ threshold.title }}{% if threshold.selected %} · zvolené{% endif %}</span>
+                <strong>{{ threshold.amount_cents | money("CZK") }}</strong>
+              </div>
+              {% if threshold.reached %}
+                <p>Překročeno o <strong>{{ threshold.exceeded_cents | money("CZK") }}</strong></p>
+              {% else %}
+                <p>Zbývá <strong>{{ threshold.remaining_cents | money("CZK") }}</strong></p>
+              {% endif %}
+            </article>
+          {% endfor %}
+        </div>
+
+        <div class="vat-meta">
+          <span>Započteno faktur: <strong>{{ flat_tax_limit.counted_invoice_count }}</strong></span>
+          {% if flat_tax_limit.foreign_currency_invoice_count %}
+            <span>Nezahrnuto cizoměnných faktur: <strong>{{ flat_tax_limit.foreign_currency_invoice_count }}</strong></span>
+          {% endif %}
+        </div>
+
+        <p class="muted">{{ flat_tax_limit.note }}</p>
+      </section>
+    {% endif %}
+
+    {% if vat_limit %}
+      <section class="card vat-card stack-md">
+        <div class="dashboard-section-head">
+          <div class="stack-sm">
+            <p class="dashboard-eyebrow">Limit DPH {{ vat_limit.year }}</p>
+            <h2>{{ vat_limit.turnover_czk_cents | money("CZK") }}</h2>
+            <p class="muted">Orientační obrat započtený z vystavených faktur v CZK za aktuální kalendářní rok.</p>
+          </div>
+          <span class="vat-badge vat-badge-{{ vat_limit.status }}">{{ vat_limit.badge_label }}</span>
+        </div>
+
+        <div class="vat-threshold-list">
+          {% for threshold in vat_limit.thresholds %}
+            <article class="vat-threshold {% if threshold.reached %}is-reached{% endif %}">
+              <div class="vat-threshold-labels">
+                <span>{{ threshold.title }}</span>
+                <strong>{{ threshold.amount_cents | money("CZK") }}</strong>
+              </div>
+              {% if threshold.reached %}
+                <p>Překročeno o <strong>{{ threshold.exceeded_cents | money("CZK") }}</strong></p>
+              {% else %}
+                <p>Zbývá <strong>{{ threshold.remaining_cents | money("CZK") }}</strong></p>
+              {% endif %}
+            </article>
+          {% endfor %}
+        </div>
+
+        <div class="vat-meta">
+          <span>Započteno faktur: <strong>{{ vat_limit.counted_invoice_count }}</strong></span>
+          {% if vat_limit.foreign_currency_invoice_count %}
+            <span>Nezahrnuto cizoměnných faktur: <strong>{{ vat_limit.foreign_currency_invoice_count }}</strong></span>
+          {% endif %}
+        </div>
+
+        <p class="muted">{{ vat_limit.note }}</p>
+      </section>
+    {% endif %}
+
+  </section>
+{% endblock %}

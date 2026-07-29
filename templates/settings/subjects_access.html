@@ -1,0 +1,222 @@
+{% extends "base.html" %}
+
+{% block title %}Přístupy k subjektu – fakturek{% endblock %}
+
+{% block content %}
+  <section class="settings-shell settings-detail-shell">
+    <a class="backlink" href="/settings#subjects-admin">← Zpět na subjekty</a>
+
+    <div class="card settings-hero">
+      <div>
+        <p class="dashboard-eyebrow">Subjekty</p>
+        <h1>Přístupy k subjektu</h1>
+        <p class="muted">{{ current_subject.name or 'Aktuální subjekt' }}{% if current_subject.ico %} · IČO {{ current_subject.ico }}{% endif %}</p>
+      </div>
+    </div>
+
+    {% if info %}
+      <div class="card settings-notice settings-notice-success">{{ info }}</div>
+    {% endif %}
+    {% if error %}
+      <div class="card settings-notice settings-notice-error"><strong>Chyba:</strong> {{ error }}</div>
+    {% endif %}
+
+    {% if can_manage_subject_users %}
+      <div class="settings-detail-grid">
+        <div class="card settings-card">
+          <div class="settings-card-head">
+            <div>
+              <p class="dashboard-eyebrow">Nový login</p>
+              <h2>Vytvořit účet s přístupem</h2>
+            </div>
+          </div>
+
+          <form method="post" action="/settings/subjects/{{ current_subject.id }}/users/create" class="form settings-form-wide">
+            {{ csrf_input(request)|safe }}
+            <input type="hidden" name="next" value="/settings/subjects/access" />
+
+            <div class="settings-form-grid">
+              <div class="form-row">
+                <label for="user_access_username">Uživatelské jméno</label>
+                <input id="user_access_username" name="username" value="{{ user_access_prefill.username }}" required />
+              </div>
+
+              <div class="form-row">
+                <label for="user_access_email">Email</label>
+                <input id="user_access_email" name="email" type="email" value="{{ user_access_prefill.email }}" required />
+              </div>
+
+              <div class="form-row">
+                <label for="user_access_password">Dočasné heslo</label>
+                <input id="user_access_password" name="password" type="text" value="{{ user_access_prefill.password }}" required />
+              </div>
+
+              <div class="form-row">
+                <label for="user_access_role">Role</label>
+                <select id="user_access_role" name="role">
+                  {% for role in (subject_user_role_options or ['manager', 'accountant', 'viewer']) %}
+                    <option value="{{ role }}" {% if (user_access_prefill.role or 'manager') == role %}selected{% endif %}>{{ role | subject_role }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+
+              <div class="form-row form-row-checkbox settings-checkbox-card">
+                <input id="user_access_can_view" name="can_view" type="checkbox" value="1" {% if user_access_prefill.can_view is not defined or user_access_prefill.can_view %}checked{% endif %} />
+                <label for="user_access_can_view"><strong>Zobrazovat</strong><span>Vidí doklady, kontakty a exporty podle oprávnění.</span></label>
+              </div>
+              <div class="form-row form-row-checkbox settings-checkbox-card">
+                <input id="user_access_can_edit" name="can_edit" type="checkbox" value="1" {% if user_access_prefill.can_edit is not defined or user_access_prefill.can_edit %}checked{% endif %} />
+                <label for="user_access_can_edit"><strong>Upravovat</strong><span>Může měnit kontakty a nastavení subjektu.</span></label>
+              </div>
+              <div class="form-row form-row-checkbox settings-checkbox-card">
+                <input id="user_access_can_issue" name="can_issue" type="checkbox" value="1" {% if user_access_prefill.can_issue is not defined or user_access_prefill.can_issue %}checked{% endif %} />
+                <label for="user_access_can_issue"><strong>Vystavovat</strong><span>Může vytvářet a vystavovat doklady.</span></label>
+              </div>
+              <div class="form-row form-row-checkbox settings-checkbox-card">
+                <input id="user_access_can_export" name="can_export" type="checkbox" value="1" {% if user_access_prefill.can_export is not defined or user_access_prefill.can_export %}checked{% endif %} />
+                <label for="user_access_can_export"><strong>Exportovat</strong><span>Může stahovat exporty a účetní podklady.</span></label>
+              </div>
+            </div>
+
+            <div class="form-actions">
+              <button class="btn primary" type="submit">Vytvořit účet a přidat přístup</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="card settings-card">
+          <div class="settings-card-head">
+            <div>
+              <p class="dashboard-eyebrow">Existující login</p>
+              <h2>Připojit účet</h2>
+            </div>
+          </div>
+
+          <form method="post" action="/settings/subjects/{{ current_subject.id }}/users/link-existing" class="form settings-form-wide">
+            {{ csrf_input(request)|safe }}
+            <input type="hidden" name="next" value="/settings/subjects/access" />
+
+            <div class="settings-form-grid">
+              <div class="form-row">
+                <label for="existing_identifier">Uživatelské jméno nebo e-mail</label>
+                <input id="existing_identifier" name="identifier" value="{{ existing_user_link_prefill.identifier }}" required />
+              </div>
+
+              <div class="form-row">
+                <label for="existing_role">Role</label>
+                <select id="existing_role" name="role">
+                  {% for role in (subject_user_role_options or ['manager', 'accountant', 'viewer']) %}
+                    <option value="{{ role }}" {% if (existing_user_link_prefill.role or 'manager') == role %}selected{% endif %}>{{ role | subject_role }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+
+              <div class="form-row form-row-checkbox settings-checkbox-card">
+                <input id="existing_can_view" name="can_view" type="checkbox" value="1" {% if existing_user_link_prefill.can_view is not defined or existing_user_link_prefill.can_view %}checked{% endif %} />
+                <label for="existing_can_view"><strong>Zobrazovat</strong><span>Vidí subjekt a jeho doklady.</span></label>
+              </div>
+              <div class="form-row form-row-checkbox settings-checkbox-card">
+                <input id="existing_can_edit" name="can_edit" type="checkbox" value="1" {% if existing_user_link_prefill.can_edit is not defined or existing_user_link_prefill.can_edit %}checked{% endif %} />
+                <label for="existing_can_edit"><strong>Upravovat</strong><span>Může měnit data subjektu.</span></label>
+              </div>
+              <div class="form-row form-row-checkbox settings-checkbox-card">
+                <input id="existing_can_issue" name="can_issue" type="checkbox" value="1" {% if existing_user_link_prefill.can_issue is not defined or existing_user_link_prefill.can_issue %}checked{% endif %} />
+                <label for="existing_can_issue"><strong>Vystavovat</strong><span>Může vytvářet doklady.</span></label>
+              </div>
+              <div class="form-row form-row-checkbox settings-checkbox-card">
+                <input id="existing_can_export" name="can_export" type="checkbox" value="1" {% if existing_user_link_prefill.can_export is not defined or existing_user_link_prefill.can_export %}checked{% endif %} />
+                <label for="existing_can_export"><strong>Exportovat</strong><span>Může stahovat podklady.</span></label>
+              </div>
+            </div>
+
+            <div class="form-actions">
+              <button class="btn" type="submit">Připojit existující účet</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <div class="card settings-card">
+        <div class="settings-card-head">
+          <div>
+            <p class="dashboard-eyebrow">Aktivní přístupy</p>
+            <h2>Lidé přiřazení k subjektu</h2>
+          </div>
+        </div>
+
+        {% if subject_users %}
+          <div class="settings-access-list">
+            {% for item in subject_users %}
+              <div class="settings-access-row">
+                <div>
+                  <strong>{{ item.username }}</strong>
+                  {% if item.is_self %}<span class="badge">ty</span>{% endif %}
+                  <span>{{ item.email }}</span>
+                </div>
+                <div>
+                  <strong>{{ item.role | subject_role }}</strong>
+                  <span>zobrazit {{ 'ano' if item.can_view else 'ne' }} · upravit {{ 'ano' if item.can_edit else 'ne' }} · vystavit {{ 'ano' if item.can_issue else 'ne' }} · export {{ 'ano' if item.can_export else 'ne' }}</span>
+                </div>
+                <div>
+                  {% if item.can_manage_link %}
+                    <details class="settings-access-edit">
+                      <summary class="btn small">Upravit</summary>
+                      <form method="post" action="/settings/subjects/{{ current_subject.id }}/users/{{ item.id }}/update" class="form settings-form-wide">
+                        {{ csrf_input(request)|safe }}
+                        <input type="hidden" name="next" value="/settings/subjects/access" />
+                        <div class="settings-form-grid">
+                          <div class="form-row">
+                            <label for="role_{{ item.id }}">Role</label>
+                            <select id="role_{{ item.id }}" name="role">
+                              {% for role in (item.role_options or []) %}
+                                <option value="{{ role }}" {% if (item.form.role or item.role) == role %}selected{% endif %}>{{ role | subject_role }}</option>
+                              {% endfor %}
+                            </select>
+                          </div>
+                          <div class="form-row form-row-checkbox settings-checkbox-card">
+                            <input id="can_view_{{ item.id }}" name="can_view" type="checkbox" value="1" {% if item.form.can_view %}checked{% endif %} />
+                            <label for="can_view_{{ item.id }}"><strong>Zobrazovat</strong></label>
+                          </div>
+                          <div class="form-row form-row-checkbox settings-checkbox-card">
+                            <input id="can_edit_{{ item.id }}" name="can_edit" type="checkbox" value="1" {% if item.form.can_edit %}checked{% endif %} />
+                            <label for="can_edit_{{ item.id }}"><strong>Upravovat</strong></label>
+                          </div>
+                          <div class="form-row form-row-checkbox settings-checkbox-card">
+                            <input id="can_issue_{{ item.id }}" name="can_issue" type="checkbox" value="1" {% if item.form.can_issue %}checked{% endif %} />
+                            <label for="can_issue_{{ item.id }}"><strong>Vystavovat</strong></label>
+                          </div>
+                          <div class="form-row form-row-checkbox settings-checkbox-card">
+                            <input id="can_export_{{ item.id }}" name="can_export" type="checkbox" value="1" {% if item.form.can_export %}checked{% endif %} />
+                            <label for="can_export_{{ item.id }}"><strong>Exportovat</strong></label>
+                          </div>
+                        </div>
+                        <div class="form-actions">
+                          <button class="btn" type="submit">Uložit změny</button>
+                        </div>
+                      </form>
+                      {% if item.can_delete_link %}
+                        <form method="post" action="/settings/subjects/{{ current_subject.id }}/users/{{ item.id }}/delete" class="inline-form settings-remove-access">
+                          {{ csrf_input(request)|safe }}
+                          <input type="hidden" name="next" value="/settings/subjects/access" />
+                          <button class="btn small subtle" type="submit">Odebrat přístup</button>
+                        </form>
+                      {% endif %}
+                    </details>
+                  {% else %}
+                    <span class="muted">{{ item.manage_hint or 'Bez správy' }}</span>
+                  {% endif %}
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="empty-state">U aktuálního subjektu zatím není nikdo další.</div>
+        {% endif %}
+      </div>
+    {% else %}
+      <div class="card settings-card">
+        Přístupy pro další uživatele může upravovat jen vlastník nebo správce aktuálního subjektu.
+      </div>
+    {% endif %}
+  </section>
+{% endblock %}

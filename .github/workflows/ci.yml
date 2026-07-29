@@ -1,0 +1,151 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - "codex/**"
+  pull_request:
+
+jobs:
+  test:
+    name: Tests and Playwright smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Compile application
+        run: python -m compileall -q fakturek
+
+      - name: Verify open-source boundary
+        run: ./tools/verify_public_release.py
+
+      - name: Run backend and browser tests
+        env:
+          PLAYWRIGHT_ARTIFACT_DIR: playwright-artifacts
+        run: ./run_audit_tests.sh
+
+      - name: Upload Playwright artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-artifacts
+          path: playwright-artifacts
+          if-no-files-found: ignore
+
+  selfhost:
+    name: Fresh Docker self-host install
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Generate local configuration
+        run: ./tools/init_env.sh
+
+      - name: Build and start the stack
+        run: docker compose up -d --build
+
+      - name: Wait for database-backed health check
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:8000/healthz/db >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose logs app db
+          exit 1
+
+      - name: Verify setup and login flow
+        run: |
+          python -m pip install --quiet httpx
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          import httpx
+
+          values = {}
+          for line in Path('.env').read_text().splitlines():
+              if line and not line.startswith('#') and '=' in line:
+                  key, value = line.split('=', 1)
+                  values[key] = value
+
+          base_url = 'http://127.0.0.1:8000'
+          setup_token = values['SETUP_TOKEN']
+          with httpx.Client(base_url=base_url, follow_redirects=False) as client:
+              page = client.get('/setup', params={'token': setup_token})
+              page.raise_for_status()
+              match = re.search(r'name="csrf_token"[^>]+value="([^"]+)"', page.text)
+              assert match, 'setup CSRF token missing'
+              response = client.post('/setup', data={
+                  'csrf_token': match.group(1),
+                  'token': setup_token,
+                  'username': 'selfhost-admin',
+                  'email': 'admin@example.test',
+                  'password': 'correct-horse-battery-staple',
+                  'password2': 'correct-horse-battery-staple',
+              })
+              assert response.status_code == 303, response.text
+
+              home = client.get(response.headers.get('location', '/'))
+              home.raise_for_status()
+              assert 'selfhost-admin' in home.text
+
+              logout = client.get('/logout')
+              logout.raise_for_status()
+              match = re.search(r'name="csrf_token"[^>]+value="([^"]+)"', logout.text)
+              assert match, 'logout CSRF token missing'
+              response = client.post('/logout', data={'csrf_token': match.group(1)})
+              assert response.status_code == 303, response.text
+
+              login = client.get('/login')
+              login.raise_for_status()
+              match = re.search(r'name="csrf_token"[^>]+value="([^"]+)"', login.text)
+              assert match, 'login CSRF token missing'
+              response = client.post('/login', data={
+                  'csrf_token': match.group(1),
+                  'identifier': 'selfhost-admin',
+                  'password': 'correct-horse-battery-staple',
+              })
+              assert response.status_code == 303, response.text
+              home = client.get(response.headers.get('location', '/'))
+              home.raise_for_status()
+              assert 'selfhost-admin' in home.text
+          PY
+
+      - name: Verify HTML PDF renderer in container
+        run: |
+          docker compose exec -T app python - <<'PY'
+          from fakturek.pdf import render_html_pdf_bytes
+
+          pdf = render_html_pdf_bytes('<h1>Fakturek</h1><p>Příliš žluťoučký kůň.</p>')
+          assert pdf.startswith(b'%PDF')
+          assert len(pdf) > 1000
+          PY
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs app db
+
+      - name: Stop stack
+        if: always()
+        run: docker compose down -v

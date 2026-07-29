@@ -1,0 +1,262 @@
+{% extends "base.html" %}
+
+{% block title %}Import #{{ run.id }} – Export/Import – fakturek{% endblock %}
+
+{% block content %}
+  <section class="stack-lg">
+    <a class="backlink" href="/imports">← Zpět na Export/Import</a>
+
+    <div class="page-header">
+      <div class="page-header-copy">
+        <p class="page-kicker">Export/Import</p>
+        <h1>Import #{{ run.id }}</h1>
+        <p>Detail konkrétního importního běhu včetně souboru, stavu a parsovacího summary.</p>
+      </div>
+    </div>
+
+    {% if notice %}
+      <p class="notice success">{{ notice }}</p>
+    {% endif %}
+
+    {% if error %}
+      <p class="notice error"><strong>Chyba:</strong> {{ error }}</p>
+    {% endif %}
+
+    <div class="card stack-md">
+      <div class="section-heading">
+        <p class="page-kicker">Běh</p>
+        <h2>Základní info</h2>
+      </div>
+
+      <div class="table-wrap">
+        <table class="table">
+          <tbody>
+            <tr><th>Zdroj</th><td>{{ run_source_label or run.source }}</td></tr>
+            <tr><th>Stav</th><td>{{ run.status }}</td></tr>
+            <tr><th>Začátek</th><td>{{ run.started_at }}</td></tr>
+            <tr><th>Konec</th><td>{{ run.finished_at or '—' }}</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      {% if can_process %}
+        <form method="post" action="/imports/{{ run.id }}/process">
+          {{ csrf_input(request)|safe }}
+          <button class="btn primary" type="submit">Spustit import</button>
+        </form>
+        <p class="muted"><small>
+          Import zpracuje nahraný soubor podle typu: CSV → kontakty, XML/PDF → faktury. ZIP může obsahovat obojí
+          (nejdřív kontakty, potom faktury). Po importu se také best-effort upraví číselné řady podle existujících
+          čísel faktur. Opakované spuštění je idempotentní.
+        </small></p>
+      {% endif %}
+    </div>
+
+    {% if preview_error %}
+      <div class="card">
+        <p class="notice error"><strong>Preview selhalo:</strong> {{ preview_error }}</p>
+      </div>
+    {% endif %}
+
+    {% if preview %}
+      <div class="card stack-md">
+        <div class="section-heading">
+          <p class="page-kicker">Preview</p>
+          <h2>Co se stane při importu</h2>
+        </div>
+        <p class="muted"><small>{{ preview.ready_note }}</small></p>
+
+        <div class="stats-grid">
+          <article class="stat-card">
+            <span class="stat-label">Kontakty nalezené</span>
+            <strong class="stat-value">{{ preview.contacts.parsed }}</strong>
+          </article>
+          <article class="stat-card">
+            <span class="stat-label">Kontakty nové</span>
+            <strong class="stat-value">{{ preview.contacts.will_create }}</strong>
+          </article>
+          <article class="stat-card">
+            <span class="stat-label">Kontakty znovupoužité</span>
+            <strong class="stat-value">{{ preview.contacts.will_reuse }}</strong>
+          </article>
+          <article class="stat-card">
+            <span class="stat-label">Kontakty bez zásahu</span>
+            <strong class="stat-value">{{ preview.contacts.will_skip or 0 }}</strong>
+          </article>
+          <article class="stat-card">
+            <span class="stat-label">Faktury připravené</span>
+            <strong class="stat-value">{{ preview.invoices.will_import }}</strong>
+          </article>
+          <article class="stat-card">
+            <span class="stat-label">Duplicitní faktury</span>
+            <strong class="stat-value">{{ preview.invoices.already_imported + preview.invoices.number_conflicts }}</strong>
+          </article>
+          <article class="stat-card">
+            <span class="stat-label">Přečíslované faktury</span>
+            <strong class="stat-value">{{ preview.invoices.will_renumber or 0 }}</strong>
+          </article>
+          <article class="stat-card">
+            <span class="stat-label">Nové kontakty z faktur</span>
+            <strong class="stat-value">{{ preview.invoices.will_create_contacts }}</strong>
+          </article>
+        </div>
+      </div>
+
+      <div class="card stack-md">
+        <div class="section-heading">
+          <p class="page-kicker">Nastavení importu</p>
+          <h2>Mapping a konflikty</h2>
+        </div>
+        <p class="muted"><small>Nejdřív si můžeš srovnat hlavičky a vybrat, jak se má import chovat při střetu s existujícími kontakty nebo čísly faktur.</small></p>
+
+        <form method="post" action="/imports/{{ run.id }}/config" class="form stack-md">
+          {{ csrf_input(request)|safe }}
+
+          <div class="filters-row">
+            <div class="field">
+              <label for="contact_conflict_mode">Konflikt kontaktu</label>
+              {% set active_contact_conflict_mode = (config.contact_conflict_mode if config and config.contact_conflict_mode else 'merge_existing') %}
+              <select id="contact_conflict_mode" name="contact_conflict_mode">
+                {% for value, label in (contact_conflict_options or []) %}
+                  <option value="{{ value }}" {% if active_contact_conflict_mode == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+
+            <div class="field">
+              <label for="invoice_number_conflict_mode">Konflikt čísla faktury</label>
+              {% set active_invoice_conflict_mode = (config.invoice_number_conflict_mode if config and config.invoice_number_conflict_mode else 'skip') %}
+              <select id="invoice_number_conflict_mode" name="invoice_number_conflict_mode">
+                {% for value, label in (invoice_conflict_options or []) %}
+                  <option value="{{ value }}" {% if active_invoice_conflict_mode == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+
+          {% if preview.contacts.headers %}
+            <div class="stack-sm">
+              <strong>Sloupce kontaktů</strong>
+              <div class="filters-row">
+                {% for field_name, field_label in (contact_mapping_fields or []) %}
+                  <div class="field">
+                    <label for="map_{{ field_name }}">{{ field_label }}</label>
+                    {% set selected_value = ((config.contact_csv_mapping or {}).get(field_name) if config and config.contact_csv_mapping else '') or ((preview.contacts.inferred_mapping or {}).get(field_name) if preview.contacts.inferred_mapping else '') %}
+                    <select id="map_{{ field_name }}" name="map_{{ field_name }}">
+                      <option value="">Nemapovat</option>
+                      {% for header in preview.contacts.headers %}
+                        <option value="{{ header }}" {% if selected_value == header %}selected{% endif %}>{{ header }}</option>
+                      {% endfor %}
+                    </select>
+                  </div>
+                {% endfor %}
+              </div>
+            </div>
+          {% endif %}
+
+          <div class="form-actions">
+            <button class="btn" type="submit">Uložit mapping a pravidla importu</button>
+          </div>
+        </form>
+
+        {% if preview.contacts.headers and preview.contacts.sample_rows %}
+          <div class="stack-sm">
+            <strong>Náhled prvních řádků CSV</strong>
+            <div class="table-wrap">
+              <table class="table">
+                <thead>
+                  <tr>
+                    {% for header in preview.contacts.headers %}
+                      <th>{{ header }}</th>
+                    {% endfor %}
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for row in preview.contacts.sample_rows %}
+                    <tr>
+                      {% for header in preview.contacts.headers %}
+                        <td>{{ row.get(header, '') }}</td>
+                      {% endfor %}
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        {% endif %}
+      </div>
+
+      {% if preview.invoices.warnings or preview.contacts.errors or preview.invoices.errors %}
+        <div class="card stack-md">
+          <div class="section-heading">
+            <p class="page-kicker">Kontrola</p>
+            <h2>Na co si dát pozor</h2>
+          </div>
+          {% if preview.invoices.warnings %}
+            <div class="stack-sm">
+              <strong>Varování u faktur</strong>
+              <ul>
+                {% for item in preview.invoices.warnings %}
+                  <li>{{ item.invoice or item.file or 'Doklad' }}: {{ item.reason or item.error or 'Neznámé varování' }}</li>
+                {% endfor %}
+              </ul>
+            </div>
+          {% endif %}
+          {% if preview.contacts.errors %}
+            <div class="stack-sm">
+              <strong>Chyby u kontaktů</strong>
+              <ul>
+                {% for item in preview.contacts.errors %}
+                  <li>{{ item.name or item.external_id or 'Kontakt' }}: {{ item.error }}</li>
+                {% endfor %}
+              </ul>
+            </div>
+          {% endif %}
+          {% if preview.invoices.errors %}
+            <div class="stack-sm">
+              <strong>Chyby u faktur</strong>
+              <ul>
+                {% for item in preview.invoices.errors %}
+                  <li>{{ item.number or item.file or item.external_id or 'Faktura' }}: {{ item.error }}</li>
+                {% endfor %}
+              </ul>
+            </div>
+          {% endif %}
+        </div>
+      {% endif %}
+    {% endif %}
+
+    <div class="card stack-md">
+      <div class="section-heading">
+        <p class="page-kicker">Soubor</p>
+        <h2>Metadata souboru</h2>
+      </div>
+
+      {% if run.file_name %}
+        <div class="table-wrap">
+          <table class="table">
+            <tbody>
+              <tr><th>Název</th><td>{{ run.file_name }}</td></tr>
+              <tr><th>Velikost</th><td>{{ run.file_size_bytes }} B</td></tr>
+              <tr><th>SHA256</th><td><code>{{ run.file_sha256 }}</code></td></tr>
+              <tr><th>MIME</th><td>{{ run.mime_type or '—' }}</td></tr>
+              <tr><th>Cesta</th><td><code>{{ run.file_path or '—' }}</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="empty-state">Soubor zatím nebyl uložen nebo metadata nejsou k dispozici.</div>
+      {% endif %}
+    </div>
+
+    {% if summary %}
+      <div class="card stack-md">
+        <div class="section-heading">
+          <p class="page-kicker">Parser</p>
+          <h2>Summary</h2>
+        </div>
+        <pre style="white-space: pre-wrap; margin: 0;">{{ summary | tojson(indent=2) }}</pre>
+      </div>
+    {% endif %}
+  </section>
+{% endblock %}

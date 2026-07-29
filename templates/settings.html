@@ -1,0 +1,1272 @@
+{% extends "base.html" %}
+
+{% block title %}Nastavení – fakturek{% endblock %}
+
+{% block content %}
+  {% set editing_account = account_prefill.id if account_prefill is defined and account_prefill else '' %}
+
+  <section class="settings-shell">
+    <div class="card settings-hero">
+      <div>
+        <p class="dashboard-eyebrow">Nastavení</p>
+        <h1>Nastavení účtu a fakturace</h1>
+      </div>
+    </div>
+
+    {% if saved %}
+      <div class="card settings-notice settings-notice-success">
+        <strong>Uloženo.</strong> Nastavení bylo aktualizováno.
+      </div>
+    {% endif %}
+
+    {% if info %}
+      <div class="card settings-notice settings-notice-success">
+        {{ info }}
+      </div>
+    {% endif %}
+
+    {% if error %}
+      <div class="card settings-notice settings-notice-error">
+        <strong>Chyba:</strong> {{ error }}
+      </div>
+    {% endif %}
+
+    {% set show_pdf_refresh_action = false %}
+    {% set next_url = '/settings#issuer' %}
+    {% include "_setup_warnings.html" %}
+
+    {% if db_enabled %}
+      <nav class="card settings-section-nav" aria-label="Přepínání sekcí nastavení">
+        <button class="settings-jump-link settings-panel-toggle" type="button" data-settings-panel-target="account" data-settings-panel-default>
+          <strong>Účet</strong>
+          <span>profil a heslo</span>
+        </button>
+        <button class="settings-jump-link settings-panel-toggle" type="button" data-settings-panel-target="billing">
+          <strong>Fakturace</strong>
+          <span>vystavovatel, daně, styly</span>
+        </button>
+        <button class="settings-jump-link settings-panel-toggle" type="button" data-settings-panel-target="banking">
+          <strong>Banky</strong>
+          <span>účty a párování plateb</span>
+        </button>
+        <button class="settings-jump-link settings-panel-toggle" type="button" data-settings-panel-target="subjects">
+          <strong>Subjekty</strong>
+          <span>další IČO, lidé a role</span>
+        </button>
+        <button class="settings-jump-link settings-panel-toggle" type="button" data-settings-panel-target="api">
+          <strong>API</strong>
+          <span>klíče a dokumentace</span>
+        </button>
+        <button class="settings-jump-link settings-panel-toggle" type="button" data-settings-panel-target="account-delete">
+          <strong>Zrušení účtu</strong>
+          <span>bezpečné ukončení</span>
+        </button>
+      </nav>
+    {% endif %}
+
+    {% if db_enabled %}
+      <section id="security" class="settings-grid settings-grid-top settings-panel-group" data-settings-panel="account">
+        <div id="subject-create-card" class="card settings-card">
+          <div class="settings-card-head">
+            <div>
+              <p class="dashboard-eyebrow">Účet</p>
+              <h2>Můj profil</h2>
+            </div>
+          </div>
+          <div class="settings-summary-grid">
+            <div class="settings-summary-item">
+              <span>Uživatelské jméno</span>
+              <strong>{{ current_user.username or request.session.get('username') or '—' }}</strong>
+            </div>
+            <div class="settings-summary-item">
+              <span>E-mail</span>
+              <strong>{{ current_user.email or '—' }}</strong>
+            </div>
+            <div class="settings-summary-item">
+              <span>Stav účtu</span>
+              <strong>{{ 'Aktivní' if current_user.is_active or current_user == {} else 'Neaktivní' }}</strong>
+            </div>
+            <div class="settings-summary-item">
+              <span>Poslední přihlášení</span>
+              <strong>{{ current_user.last_login_at or '—' }}</strong>
+            </div>
+          </div>
+        </div>
+
+        <div id="appearance" class="card settings-card">
+          <div class="settings-card-head">
+            <div>
+              <p class="dashboard-eyebrow">Uživatelské rozhraní</p>
+              <h2>Vzhled a jazyk</h2>
+            </div>
+          </div>
+          <p class="muted settings-section-copy">
+            Nastavení platí pro celý přihlášený účet napříč všemi subjekty. Jazyk vystavených faktur a PDF se nastavuje zvlášť na konkrétní faktuře.
+          </p>
+
+          <form method="post" action="/settings/theme" class="form settings-form-compact">
+            {{ csrf_input(request)|safe }}
+            <input type="hidden" name="next" value="/settings?saved=1#appearance" />
+            <div class="form-row">
+              <label for="ui_theme_settings">Motiv aplikace</label>
+              <select id="ui_theme_settings" name="ui_theme">
+                {% set selected_ui_theme = current_user.ui_theme or request.session.get('ui_theme') or 'system' %}
+                {% for value, label in ui_theme_options or [] %}
+                  <option value="{{ value }}" {% if selected_ui_theme == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+              <small class="muted">Stejnou volbu najdeš i v horní liště pod ikonou motivu.</small>
+            </div>
+            <div class="form-actions">
+              <button class="btn primary" type="submit">Uložit vzhled</button>
+            </div>
+          </form>
+
+          <hr class="settings-card-divider" />
+
+          <form method="post" action="/settings/language" class="form settings-form-compact">
+            {{ csrf_input(request)|safe }}
+            <input type="hidden" name="next" value="/settings?saved=1#appearance" />
+            <div class="form-row">
+              <label for="ui_language">Jazyk prostředí</label>
+              <select id="ui_language" name="ui_language">
+                {% set selected_ui_language = current_user.ui_language or ui_language or 'cs' %}
+                {% for value, label in ui_language_options or [] %}
+                  <option value="{{ value }}" {% if selected_ui_language == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+              <small class="muted">Vybraný jazyk se použije pro navigaci, nastavení, seznamy, formuláře a administraci.</small>
+            </div>
+            <div class="form-actions">
+              <button class="btn primary" type="submit">Uložit jazyk</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="card settings-card">
+          <div class="settings-card-head">
+            <div>
+              <p class="dashboard-eyebrow">Zabezpečení</p>
+              <h2>Změna hesla</h2>
+            </div>
+          </div>
+          <p class="muted settings-section-copy">
+            Pro změnu hesla je potřeba zadat současné heslo. Nové heslo musí mít alespoň 8 znaků.
+          </p>
+          <form method="post" action="/settings/password" class="form">
+            {{ csrf_input(request)|safe }}
+
+            <div class="form-row">
+              <label for="current_password">Současné heslo</label>
+              <input id="current_password" name="current_password" type="password" autocomplete="current-password" />
+            </div>
+
+            <div class="form-row">
+              <label for="new_password">Nové heslo</label>
+              <input id="new_password" name="new_password" type="password" autocomplete="new-password" />
+            </div>
+
+            <div class="form-row">
+              <label for="new_password2">Nové heslo znovu</label>
+              <input id="new_password2" name="new_password2" type="password" autocomplete="new-password" />
+            </div>
+
+            <div class="form-actions">
+              <button class="btn primary" type="submit">Uložit nové heslo</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="card settings-card">
+          <div class="settings-card-head">
+            <div>
+              <p class="dashboard-eyebrow">Relace</p>
+              <h2>Platnost přihlášení</h2>
+            </div>
+          </div>
+          <p class="muted settings-section-copy">
+            Po uplynutí zvolené doby tě aplikace automaticky odhlásí i v případě, že cookie v prohlížeči ještě existuje.
+          </p>
+          <form method="post" action="/settings/session" class="form">
+            {{ csrf_input(request)|safe }}
+            <div class="form-row">
+              <label for="session_max_age_days">Nechat přihlášeného nejdéle</label>
+              <select id="session_max_age_days" name="session_max_age_days">
+                {% for value, label in session_max_age_options or [] %}
+                  <option value="{{ value }}" {% if (current_user.session_max_age_days or 7) == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="form-actions">
+              <button class="btn primary" type="submit">Uložit platnost</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <section id="account-delete" class="settings-grid settings-grid-meta settings-panel-group" data-settings-panel="account-delete">
+        <div class="card settings-card account-danger-card">
+          <div class="settings-card-head">
+            <div>
+              <p class="dashboard-eyebrow">Zrušení účtu</p>
+              <h2>Ukončit používání Fakturku</h2>
+            </div>
+          </div>
+          <p class="muted settings-section-copy">
+            Účet se nejdřív deaktivuje, zneplatní se API klíče a vypnou se bankovní synchronizace u subjektů, kde jsi jediný vlastník.
+            Vystavené doklady se nemažou okamžitě bez bezpečné retenční lhůty.
+          </p>
+          {% if current_user.deletion_requested_at %}
+            <div class="notice warning">
+              <p>Účet čeká na smazání od {{ current_user.deletion_requested_at }}{% if current_user.deletion_scheduled_for %}; hard-delete nejdřív {{ current_user.deletion_scheduled_for }}{% endif %}.</p>
+            </div>
+          {% else %}
+            {% set summary = account_deletion_summary or {} %}
+            <div class="settings-summary-grid account-delete-summary">
+              <div class="settings-summary-item">
+                <span>Subjekty s přístupem</span>
+                <strong>{{ summary.subject_count or 0 }}</strong>
+              </div>
+              <div class="settings-summary-item">
+                <span>Subjekty bez jiného vlastníka</span>
+                <strong>{{ summary.sole_owned_subject_count or 0 }}</strong>
+              </div>
+              <div class="settings-summary-item">
+                <span>Faktury a doklady</span>
+                <strong>{{ summary.invoice_count or 0 }}</strong>
+              </div>
+              <div class="settings-summary-item">
+                <span>Aktivní API klíče</span>
+                <strong>{{ summary.api_token_count or 0 }}</strong>
+              </div>
+            </div>
+            <form method="post" action="/settings/account/delete" class="form account-delete-form">
+              {{ csrf_input(request)|safe }}
+              <div class="form-row">
+                <label for="delete_password_settings">Heslo</label>
+                <input id="delete_password_settings" name="password" type="password" autocomplete="current-password" required />
+              </div>
+              <div class="form-row">
+                <label for="delete_confirmation_settings">Potvrzení</label>
+                <input id="delete_confirmation_settings" name="confirmation" autocomplete="off" placeholder="SMAZAT ÚČET" required />
+                <small class="muted">Opiš přesně: <code>SMAZAT ÚČET</code></small>
+              </div>
+              <div class="form-row">
+                <label for="delete_reason_settings">Důvod / poznámka</label>
+                <textarea id="delete_reason_settings" name="reason" rows="3" placeholder="Volitelné"></textarea>
+              </div>
+              <div class="form-actions">
+                <button class="btn danger" type="submit">Zrušit účet</button>
+              </div>
+            </form>
+          {% endif %}
+        </div>
+      </section>
+
+      <section class="settings-grid settings-grid-meta settings-panel-group" data-settings-panel="api">
+        <div id="api-access" class="card settings-card settings-card-api">
+          <div class="settings-card-head">
+            <div>
+              <p class="dashboard-eyebrow">API</p>
+              <h2>API přístup</h2>
+            </div>
+          </div>
+          <p class="muted settings-section-copy">
+            Tady si vytvoříš osobní API klíč pro integrace, skripty nebo jiný server. Každý klíč je navázaný jen na jedno konkrétní IČO / subject a po vytvoření se ukáže jen jednou.
+          </p>
+
+          <div class="settings-api-docs">
+            <div class="settings-summary-grid">
+              <div class="settings-summary-item">
+                <span>Base URL</span>
+                <strong><code>{{ api_base_url }}</code></strong>
+              </div>
+              <div class="settings-summary-item">
+                <span>Kontrola API</span>
+                <strong><a href="{{ api_health_url }}" target="_blank" rel="noopener">Health endpoint</a></strong>
+              </div>
+              <div class="settings-summary-item">
+                <span>Krátkodobý limit</span>
+                <strong>{{ api_rate_limit_max }}/{{ api_rate_limit_window_seconds }} s</strong>
+              </div>
+              <div class="settings-summary-item">
+                <span>Měsíční quota</span>
+                <strong>{{ api_monthly_quota_max }} / měsíc</strong>
+              </div>
+            </div>
+            <div class="settings-link-row">
+              <a class="btn small" href="{{ api_docs_url }}" target="_blank" rel="noopener">Otevřít API dokumentaci</a>
+              <a class="btn small" href="{{ api_openapi_json_url }}" target="_blank" rel="noopener">OpenAPI JSON</a>
+            </div>
+          </div>
+
+          {% if api_token_created and api_token_created.token %}
+            <div class="settings-token-created">
+              <strong>Nový API klíč: {{ api_token_created.name or 'API token' }}</strong>
+              <code>{{ api_token_created.token }}</code>
+              {% if api_token_created.subject_id %}
+                <div class="muted">Scope: {{ api_token_created.subject_label or ('subject ' ~ api_token_created.subject_id) }}</div>
+              {% endif %}
+              <div class="muted">Tenhle klíč si ulož teď. Později už ho v plném znění znovu neuvidíš.</div>
+            </div>
+          {% endif %}
+
+          <form method="post" action="/settings/api-tokens/create" class="form settings-form-wide settings-api-create-form">
+            {{ csrf_input(request)|safe }}
+
+            <div class="settings-api-create-head">
+              <div>
+                <p class="dashboard-eyebrow">Nový klíč</p>
+                <h3>Vytvořit API klíč</h3>
+              </div>
+              <p class="muted">Nejdřív pojmenuj klíč a vyber oprávnění. Tlačítko níže patří k tomuhle formuláři.</p>
+            </div>
+
+            <div class="settings-form-grid">
+              <div class="form-row">
+                <label for="api_token_name">Název klíče</label>
+                <input id="api_token_name" name="name" value="{{ api_token_prefill.name or '' }}" placeholder="Např. Produkční integrace / WordPress / Interní skript" required aria-describedby="api_token_name_help" />
+                <small id="api_token_name_help" class="muted">Povinné. Název uvidíš v seznamu klíčů, samotný token se ukáže jen jednou.</small>
+              </div>
+
+              <div class="form-row">
+                <label for="api_token_expiry">Platnost</label>
+                <select id="api_token_expiry" name="expires_in_days">
+                  {% for value, label in (api_token_expiry_options or []) %}
+                    <option value="{{ value }}" {% if (api_token_prefill.expires_in_days or '0') == value %}selected{% endif %}>{{ label }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+
+              <div class="form-row">
+                <label for="api_token_subject">Subjekt / IČO</label>
+                <select id="api_token_subject" name="subject_id" required>
+                  <option value="">Vyber subjekt</option>
+                  {% for subject in (accessible_subjects or []) %}
+                    <option value="{{ subject.id }}" {% if (api_token_prefill.subject_id or current_subject.id|string) == subject.id|string %}selected{% endif %}>
+                      {{ subject.name }}{% if subject.ico %} • IČO {{ subject.ico }}{% endif %}
+                    </option>
+                  {% endfor %}
+                </select>
+              </div>
+
+              <div class="form-row form-row-checkbox settings-api-scope-option settings-api-sandbox-option">
+                <input id="api_token_is_sandbox" name="is_sandbox" type="checkbox" value="1" {% if api_token_prefill.is_sandbox %}checked{% endif %} />
+                <label for="api_token_is_sandbox">
+                  <strong>Zkušební prostředí</strong>
+                  <span>Klíč může volat sandbox endpointy bez uložení reálných dokladů. Ostré změny mu API odmítne.</span>
+                </label>
+              </div>
+
+              <div class="form-row form-row-checkbox settings-api-scope-option">
+                <input id="api_token_can_write" name="can_write" type="checkbox" value="1" {% if api_token_prefill.can_write %}checked{% endif %} />
+                <label for="api_token_can_write">
+                  <strong>API může zapisovat</strong>
+                  <span>Umožní vytvářet a upravovat data přes API.</span>
+                </label>
+              </div>
+              <div class="form-row form-row-checkbox settings-api-scope-option">
+                <input id="api_token_can_issue" name="can_issue" type="checkbox" value="1" {% if api_token_prefill.can_issue %}checked{% endif %} />
+                <label for="api_token_can_issue">
+                  <strong>API může vystavovat</strong>
+                  <span>Umožní přes API vystavit nebo odeslat doklady.</span>
+                </label>
+              </div>
+              <div class="form-row form-row-checkbox settings-api-scope-option">
+                <input id="api_token_can_export" name="can_export" type="checkbox" value="1" {% if api_token_prefill.can_export is not defined or api_token_prefill.can_export %}checked{% endif %} />
+                <label for="api_token_can_export">
+                  <strong>API může exportovat</strong>
+                  <span>Umožní stahovat exporty a soubory pro účetnictví.</span>
+                </label>
+              </div>
+            </div>
+
+            <div class="form-actions settings-api-create-actions">
+              <button class="btn primary" type="submit">Vytvořit API klíč</button>
+            </div>
+          </form>
+
+          <div class="settings-api-token-list-head">
+            <div>
+              <p class="dashboard-eyebrow">Vytvořené klíče</p>
+              <h3>Aktivní API klíče</h3>
+            </div>
+          </div>
+
+          {% if api_tokens %}
+            <div class="settings-api-token-list">
+              {% for token in api_tokens %}
+                <article class="settings-api-token-card">
+                  <div class="settings-api-token-head">
+                    <div>
+                      <strong>{{ token.name }}</strong>
+                      <div class="muted">{{ token.token_prefix }}…</div>
+                      <div class="muted">{{ token.subject_label }}</div>
+                      <div class="muted">
+                        Režim: {% if token.is_sandbox %}zkušební{% else %}ostrý{% endif %} ·
+                        Scope: čtení{% if token.can_write %}, zápis{% endif %}{% if token.can_issue %}, vystavení{% endif %}{% if token.can_export %}, export{% endif %}
+                      </div>
+                    </div>
+                    <span class="badge">{{ token.status_label }}{% if token.is_sandbox %} · sandbox{% endif %}</span>
+                  </div>
+                  <div class="settings-summary-grid">
+                    <div class="settings-summary-item">
+                      <span>Vytvořeno</span>
+                      <strong>{{ token.created_at or '—' }}</strong>
+                    </div>
+                    <div class="settings-summary-item">
+                      <span>Naposledy použito</span>
+                      <strong>{{ token.last_used_at or '—' }}</strong>
+                    </div>
+                    <div class="settings-summary-item">
+                      <span>Expirace</span>
+                      <strong>{{ token.expires_at or 'Bez expirace' }}</strong>
+                    </div>
+                    <div class="settings-summary-item">
+                      <span>Odvoláno</span>
+                      <strong>{{ token.revoked_at or '—' }}</strong>
+                    </div>
+                    <div class="settings-summary-item">
+                      <span>Využito {{ token.monthly_period_label }}</span>
+                      <strong>{{ token.monthly_used }} / {{ token.monthly_limit }}</strong>
+                    </div>
+                    <div class="settings-summary-item">
+                      <span>Zbývá tento měsíc</span>
+                      <strong>{{ token.monthly_remaining }}</strong>
+                    </div>
+                  </div>
+                  {% if token.can_revoke %}
+                    <form method="post" action="/settings/api-tokens/{{ token.id }}/revoke" class="settings-inline-form">
+                      {{ csrf_input(request)|safe }}
+                      <button class="btn small" type="submit" onclick="return confirm('Zneplatnit tenhle API klíč? Integrace s ním přestanou fungovat.')">Zneplatnit klíč</button>
+                    </form>
+                  {% endif %}
+                </article>
+              {% endfor %}
+            </div>
+          {% else %}
+            <div class="empty-state settings-api-empty">
+              Zatím tu nemáš žádný API klíč.
+            </div>
+          {% endif %}
+        </div>
+      </section>
+
+      <section id="issuer" class="card settings-card settings-section-card settings-panel-group" data-settings-panel="billing">
+        <div class="settings-card-head">
+          <div>
+            <p class="dashboard-eyebrow">Vystavovatel</p>
+            <h2>Fakturační údaje</h2>
+          </div>
+          <p class="muted settings-source">
+            Zdroj:
+            {% if issuer_source == 'subject' %}
+              databáze (subject)
+            {% elif issuer_source == 'legacy' %}
+              databáze (legacy)
+            {% elif issuer_source == 'form' %}
+              formulář
+            {% else %}
+              proměnné prostředí (fallback)
+            {% endif %}
+          </p>
+        </div>
+
+        {% if can_edit_subject %}
+          <form method="post" action="/settings/issuer" class="form settings-form-wide">
+            {{ csrf_input(request)|safe }}
+
+            <div class="settings-form-grid">
+            <div class="form-row">
+              <label for="name">Název</label>
+              <input id="name" name="name" value="{{ issuer.name }}" />
+            </div>
+
+            <div class="form-row">
+              <label for="email">Email</label>
+              <input id="email" name="email" type="email" value="{{ issuer.email }}" />
+            </div>
+
+            <div class="form-row">
+              <label for="phone">Telefon</label>
+              <input id="phone" name="phone" value="{{ issuer.phone }}" />
+            </div>
+
+            <div class="form-row">
+              <label for="street">Ulice</label>
+              <input id="street" name="street" value="{{ issuer.street }}" />
+            </div>
+
+            <div class="form-row">
+              <label for="city">Město</label>
+              <input id="city" name="city" value="{{ issuer.city }}" />
+            </div>
+
+            <div class="form-row">
+              <label for="zip">PSČ</label>
+              <input id="zip" name="zip" value="{{ issuer.zip }}" />
+            </div>
+
+            <div class="form-row">
+              <label for="country">Země (2 znaky)</label>
+              <input id="country" name="country" maxlength="2" value="{{ issuer.country }}" />
+            </div>
+
+            <div class="form-row">
+              <label for="ico">IČO</label>
+              <input id="ico" name="ico" value="{{ issuer.ico }}" />
+            </div>
+
+            <div class="form-row">
+              <label for="dic">DIČ</label>
+              <input id="dic" name="dic" value="{{ issuer.dic }}" />
+            </div>
+
+            <div class="form-row">
+              <label for="default_currency">Výchozí měna</label>
+              <select id="default_currency" name="default_currency">
+                {% for code, label in (currency_options or []) %}
+                  <option value="{{ code }}" {% if (issuer.default_currency or 'CZK') == code %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+
+            <div class="form-row">
+              <label for="legal_form">Typ subjektu</label>
+              <select id="legal_form" name="legal_form" data-tax-legal-form>
+                {% for value, label in (subject_legal_form_options or []) %}
+                  <option value="{{ value }}" {% if (issuer.legal_form or 'business') == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+              <div class="muted">Ovlivní jen orientační daňové hlídání a výchozí viditelnost polí. Faktury tím neměníme.</div>
+            </div>
+
+            <div class="form-row form-row-checkbox">
+              <label for="is_vat_payer">Plátce DPH</label>
+              <input id="is_vat_payer" name="is_vat_payer" type="checkbox" value="1" {% if issuer.is_vat_payer %}checked{% endif %} />
+            </div>
+
+            <div class="form-row form-row-checkbox">
+              <label for="is_vat_identified_person">Identifikovaná osoba k DPH</label>
+              <input id="is_vat_identified_person" name="is_vat_identified_person" type="checkbox" value="1" {% if issuer.is_vat_identified_person %}checked{% endif %} />
+              <div class="muted">Pro přeshraniční EU povinnosti neplátce. Nezapíná DPH na běžných tuzemských fakturách jako plátce DPH.</div>
+            </div>
+
+            <div class="form-row">
+              <label for="tax_regime">Zdanění</label>
+              <select id="tax_regime" name="tax_regime" data-tax-regime>
+                {% for value, label in (tax_regime_options or []) %}
+                  <option value="{{ value }}" {% if (issuer.tax_regime or 'standard') == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+              <div class="muted" data-tax-regime-help>
+                Klasické přiznání hlídá jen DPH limit neplátce. Paušální pásma se řeší pouze v paušálním režimu.
+              </div>
+              <div class="muted" data-nonbusiness-tax-note hidden>
+                U spolku nebo nekomerčního subjektu se na přehledu schová orientační limit DPH i paušální pásma.
+              </div>
+            </div>
+
+            <div class="form-row" data-flat-tax-field>
+              <label for="flat_tax_band">Pásmo paušální daně</label>
+              <select id="flat_tax_band" name="flat_tax_band">
+                {% for value, label in (flat_tax_band_options or []) %}
+                  <option value="{{ value }}" {% if (issuer.flat_tax_band or '1') == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+              <div class="muted">Vyber pásmo, které chceš hlídat v paušálním režimu.</div>
+            </div>
+
+            <div class="form-row" data-flat-tax-field>
+              <label for="flat_tax_income_profile">Profil příjmů pro paušál</label>
+              <select id="flat_tax_income_profile" name="flat_tax_income_profile">
+                {% for value, label in (flat_tax_income_profile_options or []) %}
+                  <option value="{{ value }}" {% if (issuer.flat_tax_income_profile or 'general') == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+              <div class="muted">První pásmo není vždy 1 500 000 Kč. Hranice závisí na tom, jaká část příjmů spadá do činností s 80% / 60% výdajovým paušálem.</div>
+            </div>
+
+            <div class="form-row form-row-checkbox">
+              <label for="tax_alerts_enabled">Posílat daňová upozornění e-mailem</label>
+              <input id="tax_alerts_enabled" name="tax_alerts_enabled" type="checkbox" value="1" {% if issuer.tax_alerts_enabled %}checked{% endif %} />
+            </div>
+
+            <div class="form-row">
+              <label for="tax_alert_email">E-mail pro upozornění</label>
+              <input id="tax_alert_email" name="tax_alert_email" type="email" value="{{ issuer.tax_alert_email or '' }}" placeholder="{{ current_user.email or issuer.email or 'jmeno@domena.cz' }}" />
+              <div class="muted">
+                Volitelné. Když pole necháš prázdné, použije se e-mail účtu{% if current_user.email %} ({{ current_user.email }}){% elif issuer.email %} nebo e-mail subjektu ({{ issuer.email }}){% endif %}.
+                Kontrola probíhá při otevření přehledu a po dosažení nového pásma pošle jen jeden e-mail.
+              </div>
+            </div>
+
+            <div class="form-row form-row-full">
+              <label>Výchozí vzhled PDF faktury</label>
+              {% set selected_pdf_theme = issuer.invoice_pdf_theme or 'standard' %}
+              <input id="default_invoice_style" type="hidden" name="default_invoice_style" value="{{ issuer.default_invoice_style or 'modern' }}" />
+              <div class="invoice-style-picker" aria-label="Výchozí vzhled PDF faktury">
+                {% for value, label in (invoice_pdf_theme_options or []) %}
+                  <label class="invoice-style-card">
+                    <input type="radio" name="invoice_pdf_theme" value="{{ value }}" {% if selected_pdf_theme == value %}checked{% endif %} />
+                    <span class="invoice-style-card-ui">
+                      <span class="invoice-style-preview invoice-style-preview-{{ 'modern' if value == 'standard' else value }}" aria-hidden="true">
+                        <span class="invoice-style-preview-banner"></span>
+                        <span class="invoice-style-preview-head"></span>
+                        <span class="invoice-style-preview-line invoice-style-preview-line-strong"></span>
+                        <span class="invoice-style-preview-line"></span>
+                        <span class="invoice-style-preview-grid"><span></span><span></span><span></span></span>
+                        <span class="invoice-style-preview-footer"></span>
+                        <span class="invoice-style-preview-total"></span>
+                      </span>
+                      <span class="invoice-style-copy">
+                        <strong>{{ label }}</strong>
+                        <small>{{ (invoice_pdf_theme_descriptions or {}).get(value, '') }}</small>
+                      </span>
+                    </span>
+                  </label>
+                {% endfor %}
+              </div>
+              <div class="muted">Použije se pro nové faktury tohoto subjektu a propíše se do interního náhledu, veřejného odkazu i PDF.</div>
+            </div>
+
+            <div class="form-row">
+              <label for="default_invoice_footer_mode">Výchozí patička faktury</label>
+              <select id="default_invoice_footer_mode" name="default_invoice_footer_mode">
+                {% for value, label in (footer_preset_options or []) %}
+                  <option value="{{ value }}" {% if (issuer.default_invoice_footer_mode or '') == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+              <div class="muted">Použije se jako výchozí text pro nové faktury tohoto subjektu.</div>
+            </div>
+
+            <div class="form-row">
+              <label for="default_invoice_footer_text">Vlastní text patičky</label>
+              <textarea id="default_invoice_footer_text" name="default_invoice_footer_text" rows="3">{{ issuer.default_invoice_footer_text or '' }}</textarea>
+              <div class="muted">Vyplň jen pokud chceš používat volbu „Vlastní text“.</div>
+            </div>
+            </div>
+
+            <div class="form-actions">
+              <button class="btn primary" type="submit">Uložit údaje vystavovatele</button>
+            </div>
+          </form>
+
+          {% set refresh_count = (issued_pdf_refresh_count or 0)|int %}
+          {% if refresh_count > 0 %}
+            <div class="settings-refresh-issued-card">
+              <div>
+                <p class="dashboard-eyebrow">Už vystavené doklady</p>
+                <h3>Přegenerovat uložená PDF</h3>
+                <p class="muted">Po doplnění fakturačních údajů nebo bankovního účtu tím obnovíš PDF všech vystavených, odeslaných a zaplacených faktur z aktuálního nastavení.</p>
+              </div>
+              <form method="post" action="/invoices/regenerate-issued-pdfs" class="settings-refresh-issued-form">
+                {{ csrf_input(request)|safe }}
+                <input type="hidden" name="next" value="/settings#issuer" />
+                <button class="btn" type="submit" onclick="return confirm('Přegenerovat PDF u všech vystavených faktur z aktuálního nastavení?')">Přegenerovat {{ refresh_count }} PDF</button>
+              </form>
+            </div>
+          {% endif %}
+        {% else %}
+          <div class="empty-state">
+            Fakturační údaje může upravovat jen uživatel s oprávněním upravovat tento subjekt.
+          </div>
+        {% endif %}
+      </section>
+
+      <section id="bank-accounts" class="settings-grid settings-panel-group" data-settings-panel="banking">
+        <div class="card settings-card">
+          <div class="settings-card-head settings-card-head-actions">
+            <div>
+              <p class="dashboard-eyebrow">Bankovní účty</p>
+              <h2>Banky</h2>
+            </div>
+            <button
+              class="btn primary"
+              type="button"
+              onclick="const el = document.getElementById('add-bank-account'); if (el) { el.open = true; el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }"
+            >Přidat účet</button>
+          </div>
+          <p class="muted settings-section-copy">
+            Přehled účtů pro faktury a párování plateb. Podrobnosti a technické nastavení jsou schované u konkrétního účtu.
+          </p>
+
+          {% if bank_accounts %}
+            <div class="table-wrap settings-bank-table-wrap">
+              <table class="table settings-bank-table">
+                <thead>
+                  <tr>
+                    <th>Účet</th>
+                    <th>Měna</th>
+                    <th>Párování</th>
+                    <th>Poslední kontrola</th>
+                    <th>Faktury</th>
+                    <th>Akce</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for account in bank_accounts %}
+                    <tr id="account-{{ account.id }}">
+                      <td>
+                        <strong>{{ account.label or 'Bankovní účet' }}</strong>
+                        {% if account.is_default %}
+                          <span class="badge">výchozí</span>
+                        {% endif %}
+                        <div class="muted settings-bank-account-line">{{ account.display or '—' }}</div>
+                        {% if account.iban %}
+                          <div class="muted settings-bank-account-line"><code>{{ account.iban }}</code></div>
+                        {% endif %}
+                      </td>
+                      <td>{{ account.currency or '—' }}</td>
+                      <td>
+                        <strong>{{ account.payment_sync_status }}</strong>
+                        <div class="muted">{{ account.payment_sync_provider_label }}</div>
+                      </td>
+                      <td>
+                        {{ account.payment_sync_last_success_at or '—' }}
+                        {% if account.payment_sync_last_error %}
+                          <div class="muted settings-bank-error">{{ account.payment_sync_last_error }}</div>
+                        {% endif %}
+                      </td>
+                      <td>{{ account.invoice_count or 0 }}</td>
+                      <td>
+                        <div class="settings-table-actions settings-bank-actions">
+                          <a class="btn small" href="/settings?edit_account={{ account.id }}#account-{{ account.id }}">Upravit</a>
+                          {% if account.payment_sync_enabled and account.payment_sync_provider != 'none' %}
+                            <form method="post" action="/settings/accounts/{{ account.id }}/sync">
+                              {{ csrf_input(request)|safe }}
+                              <button class="btn small" type="submit">Spárovat teď</button>
+                            </form>
+                          {% endif %}
+                          {% if not account.is_default %}
+                            <form method="post" action="/settings/accounts/{{ account.id }}/default">
+                              {{ csrf_input(request)|safe }}
+                              <button class="btn small" type="submit">Výchozí</button>
+                            </form>
+                          {% endif %}
+                          <form method="post" action="/settings/accounts/{{ account.id }}/delete">
+                            {{ csrf_input(request)|safe }}
+                            <button class="btn small" type="submit" onclick="return confirm('Smazat účet z nastavení? Historické faktury si ponechají uložený snapshot účtu.')">Smazat</button>
+                          </form>
+                        </div>
+                      </td>
+                    </tr>
+                    <tr class="settings-bank-details-row">
+                      <td colspan="6">
+                        <div class="settings-account-card">
+                        <details class="section-disclosure settings-account-edit" {% if editing_account and account_prefill.id == account.id %}open{% endif %}>
+                    <summary>Upravit účet</summary>
+                    <form method="post" action="/settings/accounts/{{ account.id }}/edit" class="form settings-form-wide settings-account-edit-form">
+                      {{ csrf_input(request)|safe }}
+
+                      {% set row = account_prefill if editing_account and account_prefill.id == account.id else account %}
+
+                      <div class="settings-form-grid">
+                        <div class="form-row">
+                          <label for="acc_label_{{ account.id }}">Název / štítek</label>
+                          <input id="acc_label_{{ account.id }}" name="label" value="{{ row.label }}" placeholder="Např. Hlavní účet / EUR účet / SK účet" />
+                        </div>
+
+                        <div class="form-row">
+                          <label for="acc_number_{{ account.id }}">Číslo účtu</label>
+                          <input id="acc_number_{{ account.id }}" name="account_number" value="{{ row.account_number }}" placeholder="Např. 123456789/0100" />
+                        </div>
+
+                        <div class="form-row">
+                          <label for="acc_iban_{{ account.id }}">IBAN</label>
+                          <input id="acc_iban_{{ account.id }}" name="iban" value="{{ row.iban }}" placeholder="Např. CZ6508000000192000145399" />
+                        </div>
+
+                        <div class="form-row">
+                          <label for="acc_bic_{{ account.id }}">BIC / SWIFT</label>
+                          <input id="acc_bic_{{ account.id }}" name="bic" value="{{ row.bic }}" placeholder="Např. GIBACZPX" />
+                        </div>
+
+                        <div class="form-row">
+                          <label for="acc_country_{{ account.id }}">Země účtu</label>
+                          <select id="acc_country_{{ account.id }}" name="country">
+                            {% for code, label in (account_country_options or []) %}
+                              <option value="{{ code }}" {% if (row.country or issuer.country or 'CZ') == code %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                          </select>
+                        </div>
+
+                        <div class="form-row">
+                          <label for="acc_currency_{{ account.id }}">Měna účtu</label>
+                          <select id="acc_currency_{{ account.id }}" name="currency">
+                            {% for code, label in (currency_options or []) %}
+                              <option value="{{ code }}" {% if (row.currency or issuer.default_currency or 'CZK') == code %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                          </select>
+                        </div>
+
+                        <div class="form-row form-row-checkbox">
+                          <label for="acc_is_default_{{ account.id }}">Výchozí účet</label>
+                          <input id="acc_is_default_{{ account.id }}" name="is_default" type="checkbox" value="1" {% if row.is_default %}checked{% endif %} />
+                        </div>
+                      </div>
+
+                      <div class="settings-sync-box" data-payment-sync-form>
+                        <div class="settings-sync-box-head">
+                          <div>
+                            <strong>Automatické párování plateb</strong>
+                            <div class="muted">Vybereš jen způsob párování a zbytek si fakturek dopočítá sám. U bankovních e-mailů stačí zvolit banku.</div>
+                          </div>
+                        </div>
+
+                        <div class="settings-form-grid">
+                          <div class="form-row">
+                            <label for="acc_sync_provider_{{ account.id }}">Provider</label>
+                            <select id="acc_sync_provider_{{ account.id }}" name="payment_sync_provider" data-payment-sync-provider>
+                              {% for value, label in (payment_sync_provider_options or []) %}
+                                <option value="{{ value }}" {% if (row.payment_sync_provider or 'none') == value %}selected{% endif %}>{{ label }}</option>
+                              {% endfor %}
+                            </select>
+                          </div>
+
+                          <div class="form-row settings-form-grid-span-2">
+                            <div class="muted">
+                              Jakmile vybereš Fio API nebo e-mail banky, Fakturek bude příchozí platby kontrolovat automaticky a při shodě označí fakturu jako zaplacenou.
+                            </div>
+                          </div>
+
+                          <div class="form-row settings-form-grid-span-2" data-fio-token-field>
+                            <label for="acc_fio_token_{{ account.id }}">Fio API token</label>
+                            <input
+                              id="acc_fio_token_{{ account.id }}"
+                              name="fio_api_token"
+                              type="password"
+                              value=""
+                              placeholder="{% if row.has_fio_api_token %}Token už je uložený. Vyplň jen pokud ho chceš změnit.{% else %}Vlož token z Fio API{% endif %}"
+                              autocomplete="off"
+                              data-fio-token-input
+                              data-has-fio-token="{{ '1' if row.has_fio_api_token else '0' }}"
+                            />
+                            <div class="muted">Token při uložení rovnou otestujeme proti Fio API. Po prvním zapnutí začne párování od této chvíle.</div>
+                          </div>
+
+                          <div class="form-row" data-email-parser-field>
+                            <label for="acc_email_parser_{{ account.id }}">Banka pro e-mailové notifikace</label>
+                            <select id="acc_email_parser_{{ account.id }}" name="payment_sync_email_parser" data-email-parser-select>
+                              {% for value, label in (payment_sync_email_parser_options or []) %}
+                                <option value="{{ value }}" {% if (row.payment_sync_email_parser or 'pending') == value %}selected{% endif %}>{{ label }}</option>
+                              {% endfor %}
+                            </select>
+                          </div>
+
+                          <div class="form-row settings-form-grid-span-2">
+                            <div class="muted">
+                              Pro provider <strong>E-mail banky</strong> teď umíme přímo párovat Raiffeisenbank CZ, ČSOB i Fio e-mail. Starší maily po prvním zapnutí nenačítáme zpětně, párování začne až od tohoto okamžiku.
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div class="form-actions">
+                        <button class="btn primary" type="submit">Uložit změny účtu</button>
+                        {% if editing_account and account_prefill.id == account.id %}
+                          <a class="btn" href="/settings#bank-accounts">Zrušit úpravu</a>
+                        {% endif %}
+                      </div>
+                    </form>
+                  </details>
+                        </div>
+                      </td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <div class="empty-state">
+              Zatím tu není žádný bankovní účet.
+            </div>
+          {% endif %}
+
+          <details id="add-bank-account" class="section-disclosure settings-bank-add" {% if not bank_accounts or (not editing_account and account_prefill and (account_prefill.label or account_prefill.account_number or account_prefill.iban)) %}open{% endif %}>
+            <summary>Přidat bankovní účet</summary>
+            <form method="post" action="/settings/accounts/add" class="form settings-form-wide settings-bank-add-form">
+              {{ csrf_input(request)|safe }}
+
+              <div class="settings-form-grid">
+                <div class="form-row">
+                  <label for="acc_label">Název / štítek</label>
+                  <input id="acc_label" name="label" value="{{ '' if editing_account else account_prefill.label }}" placeholder="Např. Hlavní účet / EUR účet / SK účet" />
+                </div>
+
+                <div class="form-row">
+                  <label for="acc_number">Číslo účtu</label>
+                  <input id="acc_number" name="account_number" value="{{ '' if editing_account else account_prefill.account_number }}" placeholder="Např. 123456789/0100" />
+                </div>
+
+                <div class="form-row">
+                  <label for="acc_iban">IBAN</label>
+                  <input id="acc_iban" name="iban" value="{{ '' if editing_account else account_prefill.iban }}" placeholder="Např. CZ6508000000192000145399" />
+                </div>
+
+                <div class="form-row">
+                  <label for="acc_bic">BIC / SWIFT</label>
+                  <input id="acc_bic" name="bic" value="{{ '' if editing_account else account_prefill.bic }}" placeholder="Např. GIBACZPX" />
+                </div>
+
+                <div class="form-row">
+                  <label for="acc_country">Země účtu</label>
+                  <select id="acc_country" name="country">
+                    {% for code, label in (account_country_options or []) %}
+                      <option value="{{ code }}" {% if ((account_prefill.country if not editing_account else '') or issuer.country or 'CZ') == code %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+
+                <div class="form-row">
+                  <label for="acc_currency">Měna účtu</label>
+                  <select id="acc_currency" name="currency">
+                    {% for code, label in (currency_options or []) %}
+                      <option value="{{ code }}" {% if ((account_prefill.currency if not editing_account else '') or issuer.default_currency or 'CZK') == code %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+
+                <div class="form-row form-row-checkbox">
+                  <label for="acc_is_default">Výchozí účet</label>
+                  <input id="acc_is_default" name="is_default" type="checkbox" value="1" {% if not editing_account and account_prefill.is_default %}checked{% endif %} />
+                </div>
+              </div>
+
+              <details class="settings-sync-details">
+                <summary>Automatické párování plateb</summary>
+                <div class="settings-sync-box" data-payment-sync-form>
+                  <div class="settings-form-grid">
+                    <div class="form-row">
+                      <label for="acc_sync_provider">Provider</label>
+                      <select id="acc_sync_provider" name="payment_sync_provider" data-payment-sync-provider>
+                        {% for value, label in (payment_sync_provider_options or []) %}
+                          <option value="{{ value }}" {% if ((account_prefill.payment_sync_provider if not editing_account else 'none') or 'none') == value %}selected{% endif %}>{{ label }}</option>
+                        {% endfor %}
+                      </select>
+                    </div>
+
+                    <div class="form-row settings-form-grid-span-2">
+                      <div class="muted">
+                        Jakmile vybereš Fio API nebo e-mail banky, Fakturek bude příchozí platby kontrolovat automaticky a při shodě označí fakturu jako zaplacenou.
+                      </div>
+                    </div>
+
+                    <div class="form-row settings-form-grid-span-2" data-fio-token-field>
+                      <label for="acc_fio_token">Fio API token</label>
+                      <input id="acc_fio_token" name="fio_api_token" type="password" value="" placeholder="Vlož token z Fio API" autocomplete="off" data-fio-token-input data-has-fio-token="0" />
+                      <div class="muted">Token při uložení rovnou otestujeme proti Fio API. Po prvním zapnutí začne párování od této chvíle.</div>
+                    </div>
+
+                    <div class="form-row" data-email-parser-field>
+                      <label for="acc_email_parser">Banka pro e-mailové notifikace</label>
+                      <select id="acc_email_parser" name="payment_sync_email_parser" data-email-parser-select>
+                        {% for value, label in (payment_sync_email_parser_options or []) %}
+                          <option value="{{ value }}" {% if ((account_prefill.payment_sync_email_parser if not editing_account else 'pending') or 'pending') == value %}selected{% endif %}>{{ label }}</option>
+                        {% endfor %}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              </details>
+
+              <div class="form-actions">
+                <button class="btn primary" type="submit">Přidat účet</button>
+              </div>
+            </form>
+          </details>
+        </div>
+      </section>
+
+      <section id="subjects-admin" class="settings-panel-group" data-settings-panel="subjects">
+        <div class="card settings-card settings-subjects-overview">
+          <div class="settings-card-head settings-card-head-actions">
+            <div>
+              <p class="dashboard-eyebrow">Subjekty</p>
+              <h2>Subjekty a přístupy</h2>
+              <p class="muted">Přidání dalšího IČO · Uživatelé a role pro aktuální subjekt</p>
+            </div>
+            <div class="settings-head-actions">
+              <a class="btn" href="/settings/subjects/new">Přidat IČO</a>
+              {% if can_manage_subject_users %}
+                <a class="btn primary" href="/settings/subjects/access">Nastavit přístupy</a>
+              {% endif %}
+            </div>
+          </div>
+
+          <div class="settings-current-subject">
+            <div>
+              <span class="muted">Aktuální subjekt</span>
+              <strong>{{ current_subject.name or '—' }}</strong>
+              <small>
+                {% if current_subject.ico %}IČO {{ current_subject.ico }}{% else %}Bez IČO{% endif %}
+                · {{ current_subject.country or 'CZ' }} · {{ current_subject.default_currency or 'CZK' }}
+              </small>
+            </div>
+            <a class="btn small" href="/settings#issuer">Fakturační údaje</a>
+          </div>
+
+          {% if accessible_subjects %}
+            <div class="settings-subject-list">
+              {% for subject in accessible_subjects %}
+                <div class="settings-subject-row {% if subject.is_current %}is-current{% endif %}">
+                  <div class="settings-subject-main">
+                    <strong>{{ subject.name or ('Subjekt ' ~ subject.id) }}</strong>
+                    <span>
+                      {% if subject.ico %}IČO {{ subject.ico }}{% else %}Bez IČO{% endif %}
+                      · {{ (subject.role or 'user') | subject_role }}
+                      {% if subject.country or subject.default_currency %} · {{ subject.country or '—' }} / {{ subject.default_currency or '—' }}{% endif %}
+                    </span>
+                  </div>
+                  <div class="settings-subject-actions">
+                    {% if subject.is_current %}
+                      <span class="badge">aktuální</span>
+                    {% else %}
+                      <form method="post" action="/subjects/{{ subject.id }}/switch" class="inline-form">
+                        {{ csrf_input(request)|safe }}
+                        <input type="hidden" name="next" value="{{ subject.switch_form.next }}" />
+                        {% if subject.switch_form.st %}<input type="hidden" name="st" value="{{ subject.switch_form.st }}" />{% endif %}
+                        <button type="submit" class="btn small">Přepnout</button>
+                      </form>
+                    {% endif %}
+                  </div>
+                </div>
+              {% endfor %}
+            </div>
+          {% else %}
+            <div class="empty-state">K účtu zatím není připojený žádný další subjekt.</div>
+          {% endif %}
+        </div>
+      </section>
+    {% else %}
+      <div class="card settings-card">
+        <h2>Nastavení z prostředí</h2>
+        <p><strong>Název:</strong> {{ issuer.name or '—' }}</p>
+        <p><strong>Email:</strong> {{ issuer.email or '—' }}</p>
+        <p><strong>Telefon:</strong> {{ issuer.phone or '—' }}</p>
+        <p><strong>Adresa:</strong>
+          {% if issuer.street or issuer.city or issuer.zip or issuer.country %}
+            {{ issuer.street }}{% if issuer.street %}, {% endif %}
+            {{ issuer.zip }} {{ issuer.city }}{% if issuer.city %}, {% endif %}
+            {{ issuer.country }}
+          {% else %}
+            —
+          {% endif %}
+        </p>
+        <p><strong>IČO:</strong> {{ issuer.ico or '—' }}</p>
+        <p><strong>DIČ:</strong> {{ issuer.dic or '—' }}</p>
+        <p><strong>Bankovní účet:</strong> {{ issuer.bank_account or '—' }}</p>
+        <p class="muted">
+          Úpravy jsou dostupné jen v DB režimu. V tomto prostředí se berou hodnoty z proměnných prostředí.
+        </p>
+      </div>
+    {% endif %}
+  </section>
+
+  <script>
+    document.addEventListener("DOMContentLoaded", function () {
+      const panelGroups = Array.from(document.querySelectorAll("[data-settings-panel]"));
+      const panelButtons = Array.from(document.querySelectorAll("[data-settings-panel-target]"));
+      const legalFormSelect = document.querySelector("[data-tax-legal-form]");
+      const taxRegimeSelect = document.querySelector("[data-tax-regime]");
+      const flatTaxFields = Array.from(document.querySelectorAll("[data-flat-tax-field]"));
+      const nonbusinessTaxNote = document.querySelector("[data-nonbusiness-tax-note]");
+      const serverActivePanel = "{{ active_settings_panel or '' }}";
+      const hashToPanel = {
+        "#account-delete": "account-delete",
+        "#security": "account",
+        "#appearance": "account",
+        "#issuer": "billing",
+        "#bank-accounts": "banking",
+        "#add-bank-account": "banking",
+        "#subjects-admin": "subjects",
+        "#api-access": "api"
+      };
+
+      const updateTaxFields = () => {
+        if (!taxRegimeSelect) return;
+        const legalForm = legalFormSelect ? legalFormSelect.value : "business";
+        const usesBusinessLimits = legalForm === "business" || legalForm === "company";
+        if (!usesBusinessLimits) {
+          taxRegimeSelect.value = "standard";
+        }
+        const showFlatTax = usesBusinessLimits && taxRegimeSelect.value === "flat";
+        flatTaxFields.forEach((field) => {
+          field.hidden = !showFlatTax;
+        });
+        if (nonbusinessTaxNote) {
+          nonbusinessTaxNote.hidden = usesBusinessLimits;
+        }
+      };
+      if (legalFormSelect) legalFormSelect.addEventListener("change", updateTaxFields);
+      if (taxRegimeSelect) taxRegimeSelect.addEventListener("change", updateTaxFields);
+      updateTaxFields();
+
+      const syncForms = Array.from(document.querySelectorAll("[data-payment-sync-form]"));
+      syncForms.forEach(function (syncForm) {
+        const providerSelect = syncForm.querySelector("[data-payment-sync-provider]");
+        const fioTokenField = syncForm.querySelector("[data-fio-token-field]");
+        const fioTokenInput = syncForm.querySelector("[data-fio-token-input]");
+        const emailParserField = syncForm.querySelector("[data-email-parser-field]");
+        const emailParserSelect = syncForm.querySelector("[data-email-parser-select]");
+        const updateSyncFields = function () {
+          const provider = providerSelect ? providerSelect.value : "none";
+          const showFio = provider === "fio_api";
+          const showEmail = provider === "email_bank";
+          if (fioTokenField) {
+            fioTokenField.hidden = !showFio;
+          }
+          if (fioTokenInput) {
+            const hasStoredToken = fioTokenInput.getAttribute("data-has-fio-token") === "1";
+            fioTokenInput.required = showFio && !hasStoredToken;
+            if (!showFio) {
+              fioTokenInput.value = "";
+            }
+          }
+          if (emailParserField) {
+            emailParserField.hidden = !showEmail;
+          }
+          if (emailParserSelect) {
+            emailParserSelect.required = showEmail;
+            if (!showEmail) {
+              emailParserSelect.value = "pending";
+            }
+          }
+        };
+        if (providerSelect) {
+          providerSelect.addEventListener("change", updateSyncFields);
+        }
+        updateSyncFields();
+      });
+
+      function panelForHash(hash) {
+        if (hash && hash.indexOf("#account-") === 0) {
+          return "banking";
+        }
+        return hashToPanel[hash] || null;
+      }
+
+      function revealSettingsHashTarget(hash, options) {
+        if (!hash) {
+          return;
+        }
+        try {
+          const target = document.querySelector(hash);
+          if (!target) {
+            return;
+          }
+          if (target.tagName && target.tagName.toLowerCase() === "details") {
+            target.open = true;
+          }
+          target.scrollIntoView({
+            block: "start",
+            behavior: options && options.smooth ? "smooth" : "auto"
+          });
+          const firstInput = target.querySelector("input, select, textarea, button");
+          if (firstInput && options && options.focus) {
+            window.setTimeout(function () {
+              try { firstInput.focus({ preventScroll: true }); } catch (_error) { firstInput.focus(); }
+            }, 150);
+          }
+        } catch (_error) {
+        }
+      }
+
+      function scrollToHashTarget() {
+        revealSettingsHashTarget(window.location.hash, { smooth: false, focus: false });
+      }
+
+      function setActivePanel(panelName, options) {
+        const activePanel = panelName || (panelButtons.find(function (button) {
+          return button.hasAttribute("data-settings-panel-default");
+        }) || panelButtons[0])?.getAttribute("data-settings-panel-target");
+        panelGroups.forEach(function (group) {
+          const isActive = group.getAttribute("data-settings-panel") === activePanel;
+          group.hidden = !isActive;
+          group.classList.toggle("is-active", isActive);
+        });
+        panelButtons.forEach(function (button) {
+          const isActive = button.getAttribute("data-settings-panel-target") === activePanel;
+          button.classList.toggle("is-active", isActive);
+          button.setAttribute("aria-pressed", isActive ? "true" : "false");
+        });
+        if (options && options.updateHash) {
+          const nextHash = Object.keys(hashToPanel).find(function (key) {
+            return hashToPanel[key] === activePanel;
+          }) || "";
+          if (nextHash && window.location.hash !== nextHash) {
+            try {
+              window.history.replaceState(null, "", window.location.pathname + window.location.search + nextHash);
+            } catch (_error) {
+              window.location.hash = nextHash.slice(1);
+            }
+          }
+        }
+      }
+
+      panelButtons.forEach(function (button) {
+        button.addEventListener("click", function () {
+          const target = button.getAttribute("data-settings-panel-target");
+          setActivePanel(target, { updateHash: true });
+        });
+      });
+
+      Array.from(document.querySelectorAll(".setup-warning-link")).forEach(function (link) {
+        link.addEventListener("click", function (event) {
+          const url = new URL(link.href, window.location.href);
+          if (url.pathname !== window.location.pathname || !url.hash) {
+            return;
+          }
+          const targetPanel = panelForHash(url.hash);
+          if (!targetPanel) {
+            return;
+          }
+          event.preventDefault();
+          setActivePanel(targetPanel, { updateHash: false });
+          try {
+            window.history.replaceState(null, "", window.location.pathname + window.location.search + url.hash);
+          } catch (_error) {
+            window.location.hash = url.hash.slice(1);
+          }
+          window.requestAnimationFrame(function () {
+            revealSettingsHashTarget(url.hash, { smooth: true, focus: true });
+          });
+        });
+      });
+
+      const initialPanel = panelForHash(window.location.hash) || serverActivePanel || null;
+      setActivePanel(initialPanel, { updateHash: false });
+      window.requestAnimationFrame(scrollToHashTarget);
+
+      if (!{{ "true" if subject_lookup_done else "false" }}) {
+        return;
+      }
+      setActivePanel("subjects");
+      if (window.location.hash !== "#subjects-admin") {
+        try {
+          window.history.replaceState(null, "", window.location.pathname + window.location.search + "#subjects-admin");
+        } catch (_error) {
+          window.location.hash = "subjects-admin";
+        }
+      }
+      const subjectCard = document.getElementById("subject-create-card") || document.getElementById("subjects-admin");
+      if (subjectCard) {
+        subjectCard.scrollIntoView({ block: "start", behavior: "auto" });
+      }
+      const nameField = document.getElementById("subject_name");
+      const emailField = document.getElementById("subject_email");
+      const submitButton = document.getElementById("subject_create_submit");
+      if (nameField && !nameField.value.trim()) {
+        nameField.focus();
+        return;
+      }
+      if (emailField && !emailField.value.trim()) {
+        emailField.focus();
+        return;
+      }
+      if (submitButton) {
+        submitButton.focus();
+      }
+    });
+  </script>
+{% endblock %}

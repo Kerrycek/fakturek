@@ -1,0 +1,767 @@
+{% extends "base.html" %}
+{% block title %}{{ invoice.number }} – {{ document_label or 'Doklad' }} – fakturek{% endblock %}
+
+{% block content %}
+  <section class="stack-lg">
+    <a class="backlink" href="/invoices">← Faktury</a>
+
+    {% set is_overdue = (today is defined) and (invoice.due_date < today) and (invoice.status not in ['paid', 'cancelled']) %}
+    {% set detail_subtitle = invoice_buyer.name or invoice.contact.name %}
+    {% if source_invoice_number %}
+      {% set detail_subtitle = detail_subtitle ~ ' • navazuje na ' ~ source_invoice_number %}
+    {% endif %}
+    {% set detail_chips = [invoice.status | invoice_status] %}
+    {% if is_overdue %}
+      {% set detail_chips = detail_chips + ['Po splatnosti'] %}
+    {% endif %}
+    {% if public_view_count %}
+      {% set detail_chips = detail_chips + ['Klient otevřel'] %}
+    {% endif %}
+    {% set can_mark_paid = can_edit and invoice.status in ['issued', 'sent'] %}
+    {% set can_mark_unpaid = can_edit and invoice.status == 'paid' and revert_status in ['issued', 'sent'] %}
+    <section class="card invoice-detail-hero">
+      <div class="invoice-detail-hero-head">
+        <div class="invoice-detail-hero-copy">
+          <p class="page-kicker">{{ document_detail_label or 'Detail dokladu' }}</p>
+          <h1 class="invoice-detail-hero-title">{{ invoice.number }}</h1>
+          <p class="invoice-detail-hero-subtitle">{{ detail_subtitle }}</p>
+          {% if detail_chips %}
+            <div class="invoice-action-bar-chips">
+              {% for chip in detail_chips if chip %}
+                <span class="invoice-action-chip">{{ chip }}</span>
+              {% endfor %}
+            </div>
+          {% endif %}
+        </div>
+        <div class="invoice-detail-total invoice-detail-total-sheet">
+          <span>Celkem k úhradě</span>
+          <strong>{{ invoice.total_cents | money(invoice.currency) }}</strong>
+        </div>
+      </div>
+
+      <div class="invoice-detail-hero-actions">
+        <a class="btn" href="{{ public_url if invoice.status != 'draft' and public_url else ('/invoices/' ~ invoice.id ~ '/print') }}">Náhled</a>
+        <a class="btn" href="/invoices/{{ invoice.id }}/pdf" target="_blank" rel="noopener">PDF</a>
+        {% if invoice.status not in ['draft', 'cancelled'] %}
+          <button class="btn primary" type="button" data-dialog-open="send-email-dialog">Poslat e-mailem</button>
+        {% endif %}
+        {% if can_edit %}
+          <a class="btn" href="/invoices/{{ invoice.id }}/edit">
+            {% if (document_type or 'invoice') == 'quote' %}Upravit nabídku{% elif (document_type or 'invoice') == 'credit_note' %}Upravit dobropis{% elif (document_type or 'invoice') == 'proforma' %}Upravit zálohovou fakturu{% else %}Upravit fakturu{% endif %}
+          </a>
+          <form method="post" action="/invoices/{{ invoice.id }}/duplicate">
+            {{ csrf_input(request)|safe }}
+            <button class="btn" type="submit">Duplikovat doklad</button>
+          </form>
+        {% endif %}
+        {% if invoice.status != 'draft' and public_url %}
+          <button class="btn" type="button" data-copy-public-url="{{ public_url }}">Kopírovat odkaz</button>
+        {% endif %}
+        {% if can_mark_paid %}
+          <button class="btn primary" type="button" data-dialog-open="mark-paid-dialog">Označit jako zaplacenou</button>
+        {% endif %}
+        <details class="invoice-detail-more">
+          <summary class="btn">Více</summary>
+          <div class="invoice-detail-more-menu">
+            {% if can_export|default(false) %}
+              <a class="btn small" href="/invoices/{{ invoice.id }}/pdf?download=1">Stáhnout PDF</a>
+              <a class="btn small" href="/invoices/{{ invoice.id }}/isdoc?download=1">Stáhnout ISDOC</a>
+            {% endif %}
+            {% if invoice.status != 'draft' and public_url %}
+              <a class="btn small" href="{{ public_url }}" target="_blank" rel="noopener">Sdílený odkaz</a>
+            {% elif invoice.status != 'draft' %}
+              <form method="post" action="/invoices/{{ invoice.id }}/public/enable">
+                {{ csrf_input(request)|safe }}
+                <input type="hidden" name="next" value="{{ next_url or '/invoices/' ~ invoice.id }}" />
+                <button class="btn small" type="submit">Zapnout veřejný odkaz</button>
+              </form>
+            {% endif %}
+            {% if payment_method == 'cash' and invoice.status == 'paid' %}
+              <a class="btn small" href="/invoices/{{ invoice.id }}/cash-receipt" target="_blank" rel="noopener">Potvrzení hotovosti</a>
+              <a class="btn small" href="/invoices/{{ invoice.id }}/cash-receipt/pdf" target="_blank" rel="noopener">PDF potvrzení</a>
+            {% endif %}
+            {% if can_mark_unpaid %}
+              <form method="post" action="/invoices/{{ invoice.id }}/status">
+                {{ csrf_input(request)|safe }}
+                <input type="hidden" name="status" value="{{ revert_status }}" />
+                <input type="hidden" name="unpaid" value="1" />
+                <input type="hidden" name="next" value="{{ next_url or '/invoices/' ~ invoice.id }}" />
+                <button class="btn small" type="submit" onclick="return confirm('Opravdu označit doklad jako nezaplacený? Datum úhrady se smaže a změna se zapíše do historie.')">{{ revert_status_label or 'Označit jako nezaplacenou' }}</button>
+              </form>
+            {% endif %}
+            {% if can_edit %}
+              {% if document_type != 'credit_note' %}
+                <button class="btn small" type="button" data-dialog-open="recurring-dialog">Automatické faktury</button>
+              {% endif %}
+              {% if (document_type or 'invoice') == 'invoice' and invoice.status != 'draft' %}
+                <form method="post" action="/invoices/{{ invoice.id }}/credit-note">
+                  {{ csrf_input(request)|safe }}
+                  <button class="btn small" type="submit" onclick="return confirm('Vytvořit nový dobropis navázaný na tento doklad?')">Vystavit dobropis</button>
+                </form>
+              {% endif %}
+              {% for target_type, target_label in (conversion_targets or []) %}
+                <form method="post" action="/invoices/{{ invoice.id }}/convert">
+                  {{ csrf_input(request)|safe }}
+                  <input type="hidden" name="target_document_type" value="{{ target_type }}" />
+                  <button class="btn small" type="submit">{{ target_label }}</button>
+                </form>
+              {% endfor %}
+            {% endif %}
+            {% if invoice.status == 'draft' and can_issue %}
+              <form method="post" action="/invoices/{{ invoice.id }}/issue">
+                {{ csrf_input(request)|safe }}
+                <button class="btn small" type="submit" onclick="return confirm('Vystavit doklad a přidělit finální číslo?')">
+                  {% if (document_type or 'invoice') == 'quote' %}Vystavit nabídku{% elif (document_type or 'invoice') == 'credit_note' %}Vystavit dobropis{% elif (document_type or 'invoice') == 'proforma' %}Vystavit zálohovou fakturu{% else %}Vystavit fakturu{% endif %}
+                </button>
+              </form>
+            {% endif %}
+            {% if invoice.status == 'issued' %}
+              <form method="post" action="/invoices/{{ invoice.id }}/status">
+                {{ csrf_input(request)|safe }}
+                <input type="hidden" name="status" value="sent" />
+                <input type="hidden" name="next" value="{{ next_url or '/invoices/' ~ invoice.id }}" />
+                <button class="btn small" type="submit">Označit jako odeslanou</button>
+              </form>
+            {% endif %}
+            {% if (document_type or 'invoice') != 'credit_note' and (today is defined) and (invoice.due_date < today) and (invoice.status not in ['paid', 'cancelled']) %}
+              <a class="btn small" href="#send-reminder">Poslat upomínku</a>
+            {% endif %}
+            {% if can_cancel %}
+              <form method="post" action="/invoices/{{ invoice.id }}/status">
+                {{ csrf_input(request)|safe }}
+                <input type="hidden" name="status" value="cancelled" />
+                <input type="hidden" name="next" value="{{ next_url or '/invoices/' ~ invoice.id }}" />
+                <button class="btn small" type="submit" onclick="return confirm('Opravdu stornovat tento doklad?')">Stornovat</button>
+              </form>
+            {% endif %}
+            {% if revert_status and revert_status_label and not can_mark_unpaid %}
+              <form method="post" action="/invoices/{{ invoice.id }}/status">
+                {{ csrf_input(request)|safe }}
+                <input type="hidden" name="status" value="{{ revert_status }}" />
+                <input type="hidden" name="next" value="{{ next_url or '/invoices/' ~ invoice.id }}" />
+                <button class="btn small" type="submit">{{ revert_status_label }}</button>
+              </form>
+            {% endif %}
+            {% if can_delete %}
+              <form method="post" action="/invoices/{{ invoice.id }}/delete">
+                {{ csrf_input(request)|safe }}
+                <button class="btn small" type="submit" onclick="return confirm('Opravdu smazat tento doklad? Tato akce nejde vrátit zpět.')">Smazat doklad</button>
+              </form>
+            {% endif %}
+          </div>
+        </details>
+      </div>
+
+    </section>
+
+    {% if notice %}
+      <p class="notice success">{{ notice }}</p>
+    {% endif %}
+
+    {% if error %}
+      <p class="notice error"><strong>Chyba:</strong> {{ error }}</p>
+    {% endif %}
+
+    {% include "_setup_warnings.html" %}
+
+    <section class="card invoice-detail-sheet">
+      <div class="invoice-detail-sheet-grid">
+        <section class="invoice-detail-sheet-block">
+          <div class="invoice-detail-sheet-block-head">
+            <p class="page-kicker">Odběratel</p>
+            <a class="btn small" href="/contacts/{{ invoice.contact.id }}">Kontakt</a>
+          </div>
+          <div class="invoice-detail-party">
+            <strong>{{ invoice_buyer.name or invoice.contact.name }}</strong>
+            {% if invoice_buyer.street %}<span>{{ invoice_buyer.street }}</span>{% endif %}
+            {% if invoice_buyer.zip or invoice_buyer.city %}
+              <span>{{ invoice_buyer.zip or '' }} {{ invoice_buyer.city or '' }}</span>
+            {% endif %}
+            {% if invoice_buyer.country %}<span>{{ invoice_buyer.country }}</span>{% endif %}
+          </div>
+          <div class="info-grid invoice-detail-facts-grid">
+            {% if invoice_buyer.ico %}
+              <div class="info-pair">
+                <span>IČO</span>
+                <strong>{{ invoice_buyer.ico }}</strong>
+              </div>
+            {% endif %}
+            {% if invoice_buyer.dic %}
+              <div class="info-pair">
+                <span>DIČ</span>
+                <strong>{{ invoice_buyer.dic }}</strong>
+              </div>
+            {% endif %}
+          </div>
+        </section>
+
+        <section class="invoice-detail-sheet-block invoice-detail-overview-card">
+          <p class="page-kicker">Přehled dokladu</p>
+          <div class="info-grid invoice-detail-facts-grid">
+            <div class="info-pair">
+              <span>Vystaveno</span>
+              <strong>{{ invoice.issue_date }}</strong>
+            </div>
+            {% if is_vat_payer %}
+              <div class="info-pair">
+                <span>DUZP</span>
+                <strong>{{ taxable_supply_date or invoice.issue_date }}</strong>
+              </div>
+            {% endif %}
+            <div class="info-pair">
+              <span>Splatnost</span>
+              <strong>
+                {{ invoice.due_date }}
+                {% if is_overdue %}
+                  <span class="badge overdue">po splatnosti</span>
+                {% endif %}
+              </strong>
+            </div>
+            <div class="info-pair">
+              <span>Stav</span>
+              <strong>{{ invoice.status | invoice_status }}</strong>
+            </div>
+            <div class="info-pair">
+              <span>Měna</span>
+              <strong>{{ invoice.currency }}</strong>
+            </div>
+            <div class="info-pair">
+              <span>Způsob platby</span>
+              <strong>{{ payment_method | invoice_payment_method }}</strong>
+            </div>
+            <div class="info-pair">
+              <span>Veřejný odkaz</span>
+              <strong>
+                {% if public_view_count %}
+                  {{ public_view_count }}× otevřeno
+                {% elif public_url %}
+                  zatím neotevřeno
+                {% else %}
+                  vypnutý
+                {% endif %}
+              </strong>
+            </div>
+            {% if public_last_viewed_at %}
+              <div class="info-pair">
+                <span>Naposledy zobrazeno</span>
+                <strong>{{ public_last_viewed_at }}</strong>
+              </div>
+            {% endif %}
+            {% if source_invoice_number %}
+              <div class="info-pair">
+                <span>Navázaný doklad</span>
+                <strong>{% if invoice.source_invoice_id %}<a href="/invoices/{{ invoice.source_invoice_id }}">{{ source_invoice_number }}</a>{% else %}{{ source_invoice_number }}{% endif %}</strong>
+              </div>
+            {% endif %}
+          </div>
+        </section>
+
+        <section class="invoice-detail-sheet-block invoice-detail-sheet-block-accent">
+          <p class="page-kicker">Platba</p>
+          <div class="invoice-detail-sheet-payment">
+            <div class="info-pair">
+              <span>Variabilní symbol</span>
+              <div class="invoice-detail-inline-copy">
+                <strong>{{ variable_symbol or '—' }}</strong>
+                {% if variable_symbol %}
+                  <button
+                    class="btn small"
+                    type="button"
+                    onclick="if (navigator.clipboard) { navigator.clipboard.writeText('{{ variable_symbol }}'); this.textContent='Zkopírováno'; setTimeout(() => this.textContent='Kopírovat VS', 1400); } return false;"
+                  >
+                    Kopírovat VS
+                  </button>
+                {% endif %}
+              </div>
+            </div>
+            {% if payment_method == 'bank_transfer' and payment_account %}
+              {% if payment_account.country != 'SK' %}
+                <div class="info-pair">
+                  <span>Účet</span>
+                  <strong>{{ payment_account.number or '—' }}</strong>
+                </div>
+              {% endif %}
+              {% if payment_account.iban %}
+                <div class="info-pair">
+                  <span>IBAN</span>
+                  <strong class="invoice-detail-mono">{{ payment_account.iban_display or payment_account.iban }}</strong>
+                </div>
+              {% endif %}
+            {% endif %}
+          </div>
+          <div class="invoice-detail-summary">
+            <div class="info-pair">
+              <span>Mezisoučet</span>
+              <strong>{{ items_total_cents | money(invoice.currency) }}</strong>
+            </div>
+            {% if discount_cents %}
+              <div class="info-pair">
+                <span>Sleva</span>
+                <strong>-{{ discount_cents | money(invoice.currency) }}</strong>
+              </div>
+            {% endif %}
+            {% if rounding_adjustment_cents %}
+              <div class="info-pair">
+                <span>Zaokrouhlení</span>
+                <strong>{{ rounding_adjustment_cents | money(invoice.currency) }}</strong>
+              </div>
+            {% endif %}
+            <div class="info-pair invoice-detail-summary-total">
+              <span>Celkem</span>
+              <strong>{{ invoice.total_cents | money(invoice.currency) }}</strong>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      {% if is_vat_payer and vat_summary and vat_summary.rows %}
+        <section class="card stack-sm">
+          <div class="dashboard-section-head">
+            <div>
+              <p class="page-kicker">DPH</p>
+              <h2>Daňové členění</h2>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Sazba</th>
+                  <th>Základ</th>
+                  <th>DPH</th>
+                  <th>Celkem</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in vat_summary.rows %}
+                  <tr>
+                    <td>{{ row.rate }}%</td>
+                    <td>{{ row.net_cents | money(invoice.currency) }}</td>
+                    <td>{{ row.vat_cents | money(invoice.currency) }}</td>
+                    <td>{{ row.gross_cents | money(invoice.currency) }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          <div class="info-grid">
+            <div class="info-pair"><span>Základ celkem</span><strong>{{ vat_summary.net_cents | money(invoice.currency) }}</strong></div>
+            <div class="info-pair"><span>DPH celkem</span><strong>{{ vat_summary.vat_cents | money(invoice.currency) }}</strong></div>
+            <div class="info-pair"><span>Včetně DPH</span><strong>{{ vat_summary.gross_cents | money(invoice.currency) }}</strong></div>
+            {% if vat_classification %}
+              <div class="info-pair"><span>Přiznání DPH</span><strong>{{ vat_classification.vat_return }}</strong></div>
+              <div class="info-pair"><span>Kontrolní hlášení</span><strong>{{ vat_classification.control_statement }}</strong></div>
+              <div class="info-pair"><span>Souhrnné hlášení</span><strong>{{ vat_classification.summary_statement }}</strong></div>
+            {% endif %}
+          </div>
+          {% if vat_classification and vat_classification.note %}<p class="muted">{{ vat_classification.note }}</p>{% endif %}
+        </section>
+      {% endif %}
+
+      {% if invoice.notes %}
+        <div class="invoice-detail-note invoice-detail-note-sheet">
+          <span>Poznámka</span>
+          <p>{{ invoice.notes }}</p>
+        </div>
+      {% endif %}
+    </section>
+
+    <div class="section-heading invoice-detail-section-heading">
+      <p class="page-kicker">Položky</p>
+      <h2>Obsah dokladu</h2>
+    </div>
+    {% if items %}
+      <div class="table-wrap invoice-detail-items-table">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Popis</th>
+              <th>Množství</th>
+              <th>Jedn. cena</th>
+              {% if show_vat %}<th>DPH</th>{% endif %}
+              <th>Celkem</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for it in items %}
+              <tr>
+                <td>{{ it.description }}</td>
+                <td>{{ it.quantity }}{% if it.unit %} {{ it.unit }}{% endif %}</td>
+                <td>{{ it.unit_price_cents | money(invoice.currency) }}</td>
+                {% if show_vat %}<td>{{ it.vat_rate }}%</td>{% endif %}
+                <td>{{ it.line_total_cents | money(invoice.currency) }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="empty-state">Zatím bez položek.</div>
+    {% endif %}
+
+    {% if document_type != 'credit_note' and invoice.status != 'draft' %}
+      <dialog class="app-dialog" id="recurring-dialog">
+        <div class="app-dialog-card">
+          <div class="app-dialog-head">
+            <div>
+              <p class="page-kicker">Opakování</p>
+              <h3>Automatické faktury</h3>
+            </div>
+            <button class="btn small" type="button" data-dialog-close="recurring-dialog">Zavřít</button>
+          </div>
+          <div class="app-dialog-body">
+            <p class="muted">Z tohohle dokladu uděláš šablonu pro automatické faktury. V položkách a poznámkách můžeš používat tokeny <code>{{ '{{month_name}}' }}</code>, <code>{{ '{{month}}' }}</code>, <code>{{ '{{year}}' }}</code>, <code>{{ '{{period_label}}' }}</code>. Posuny fungují třeba jako <code>{{ '{{month_name+1}}' }}</code>, <code>{{ '{{period_label-1}}' }}</code>, <code>{{ '{{month++}}' }}</code>, <code>{{ '{{month_start+1}}' }}</code> a <code>{{ '{{month_end+1}}' }}</code>.</p>
+            <form method="post" action="/invoices/{{ invoice.id }}/recurring" class="form">
+              {{ csrf_input(request)|safe }}
+              <div class="grid two">
+                <div class="field">
+                  <label for="recurring_name">Název opakování</label>
+                  <input id="recurring_name" name="name" value="{{ recurring_prefill.name }}" />
+                </div>
+                <div class="field">
+                  <label for="recurring_next_issue_date">Další vystavení</label>
+                  <input id="recurring_next_issue_date" type="date" name="next_issue_date" value="{{ recurring_prefill.next_issue_date }}" />
+                </div>
+                <div class="field">
+                  <label for="recurring_interval_unit">Opakovat</label>
+                  <select id="recurring_interval_unit" name="interval_unit">
+                    <option value="week">Týdně</option>
+                    <option value="month" selected>Měsíčně</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="recurring_interval_count">Každý kolikátý interval</label>
+                  <input id="recurring_interval_count" name="interval_count" type="number" min="1" value="{{ recurring_prefill.interval_count }}" />
+                </div>
+                <div class="field">
+                  <label for="recurring_due_in_days">Splatnost za dní</label>
+                  <input id="recurring_due_in_days" name="due_in_days" type="number" min="0" value="{{ recurring_prefill.due_in_days }}" />
+                </div>
+                <div class="field">
+                  <label for="recurring_email_override">E-mail pro auto-posílání</label>
+                  <input id="recurring_email_override" name="email_override" placeholder="nechat prázdné = e-mail kontaktu" />
+                </div>
+              </div>
+              <div class="toolbar">
+                <label class="checkbox-inline"><input type="checkbox" name="auto_issue" value="1" checked /> v den běhu vystavit jako ostrý doklad</label>
+                <label class="checkbox-inline"><input type="checkbox" name="auto_send" value="1" /> rovnou poslat e-mailem</label>
+              </div>
+              <p class="muted">Když vystavení vypneš, automatika v daný den založí jen koncept. Neznamená to vystavit hned při uložení plánu.</p>
+              <div class="form-actions">
+                <button class="btn primary" type="submit">Uložit opakování</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </dialog>
+    {% endif %}
+
+    {% if can_mark_paid %}
+      <dialog class="app-dialog" id="mark-paid-dialog">
+        <div class="app-dialog-card">
+          <div class="app-dialog-head">
+            <div>
+              <p class="page-kicker">Úhrada</p>
+              <h3>Označit jako zaplacenou</h3>
+            </div>
+            <button class="btn small" type="button" data-dialog-close="mark-paid-dialog">Zavřít</button>
+          </div>
+          <div class="app-dialog-body">
+            <form method="post" action="/invoices/{{ invoice.id }}/status" class="form">
+              {{ csrf_input(request)|safe }}
+              <input type="hidden" name="status" value="paid" />
+              <input type="hidden" name="next" value="{{ next_url or '/invoices/' ~ invoice.id }}" />
+              <div class="form-row">
+                <label for="paid_on_dialog">Kdy byla faktura uhrazena?</label>
+                <input id="paid_on_dialog" type="date" name="paid_on" value="{{ today }}" />
+              </div>
+              <div class="form-actions">
+                <button class="btn" type="button" data-dialog-close="mark-paid-dialog">Zrušit</button>
+                <button class="btn primary" type="submit">Označit jako zaplacenou</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </dialog>
+    {% endif %}
+    {% if invoice.status != 'draft' and (credit_summary["items"] or []) %}
+      <div class="card stack-sm">
+        <h3>Dobropisy k tomuto dokladu</h3>
+        <p><strong>Dobropisováno celkem:</strong> {{ credit_summary.credited_total_cents | money(invoice.currency) }}</p>
+        <p><strong>Zbývá z původní faktury:</strong> {{ remaining_after_credit_cents | money(invoice.currency) }}</p>
+        <div class="stack-sm">
+          {% for credit in credit_summary["items"] %}
+            <div class="info-grid">
+              <div class="info-pair">
+                <span>Doklad</span>
+                <strong><a href="/invoices/{{ credit.id }}">{{ credit.number }}</a></strong>
+              </div>
+              <div class="info-pair">
+                <span>Stav</span>
+                <strong>{{ credit.status | invoice_status }}</strong>
+              </div>
+              <div class="info-pair">
+                <span>Částka</span>
+                <strong>{{ credit.total_cents | money(credit.currency) }}</strong>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    {% endif %}
+
+  {% set is_overdue_reminder = (today is defined) and (invoice.due_date < today) and (invoice.status not in ['paid', 'cancelled']) %}
+
+  {% if (document_type or 'invoice') != 'credit_note' and invoice.status != 'draft' and is_overdue_reminder %}
+    <details class="section-disclosure card scroll-card" id="send-reminder">
+      <summary>Upomínka po splatnosti</summary>
+      <div class="section-disclosure-body">
+        <p class="muted">{{ document_label or 'Doklad' }} je po splatnosti{% if days_overdue is defined %} <strong>{{ days_overdue }}</strong> dní{% endif %}.</p>
+        {% if invoice.reminder_sent_at %}
+          <p class="muted">Poslední upomínka: {{ invoice.reminder_sent_at }} (UTC)</p>
+        {% endif %}
+        {% if not smtp_ready %}
+          <p class="muted">SMTP není nastavené. Doplň <code>SMTP_HOST</code> a případně <code>SMTP_USERNAME</code>, <code>SMTP_PASSWORD</code> a <code>SMTP_FROM_EMAIL</code>.</p>
+        {% else %}
+          <form method="post" action="/invoices/{{ invoice.id }}/reminder" class="form">
+            {{ csrf_input(request)|safe }}
+            <input type="hidden" name="next" value="{{ next_url or '/invoices/' ~ invoice.id }}" />
+
+          <div class="form-row">
+            <label for="rem_to_email">Komu</label>
+            <input id="rem_to_email" name="to_email" required value="{{ prefill_reminder.to_email }}" />
+            <div class="muted">Lze zadat více adres oddělených čárkou nebo středníkem.</div>
+            {% if contact_email_list %}
+              <div class="recipient-shortcuts">
+                {% for email in contact_email_list %}
+                  <button class="btn small" type="button" data-fill-target="rem_to_email" data-fill-value="{{ email }}">{{ email }}</button>
+                {% endfor %}
+                {% if contact_email_joined and (contact_email_list|length > 1) %}
+                  <button class="btn small" type="button" data-fill-target="rem_to_email" data-fill-value="{{ contact_email_joined }}">Všechny kontaktní e-maily</button>
+                {% endif %}
+              </div>
+            {% endif %}
+          </div>
+          <div class="form-row">
+            <label for="rem_cc_email">Kopie (CC)</label>
+            <input id="rem_cc_email" name="cc_email" value="{{ prefill_reminder.cc_email or '' }}" />
+            <div class="muted">Volitelné. Hodí se třeba pro účetní nebo pro kopii sobě.</div>
+            {% if copy_to_self_email %}
+              <div class="recipient-shortcuts">
+                <button class="btn small" type="button" data-fill-target="rem_cc_email" data-fill-value="{{ copy_to_self_email }}">Kopie mně</button>
+              </div>
+            {% endif %}
+          </div>
+          <div class="form-row">
+            <label for="rem_subject">Předmět</label>
+            <input id="rem_subject" name="subject" required value="{{ prefill_reminder.subject }}" />
+          </div>
+          <div class="form-row">
+            <label for="rem_body">Text</label>
+            <textarea id="rem_body" name="body" rows="8">{{ prefill_reminder.body }}</textarea>
+          </div>
+          <div class="form-row">
+            <label class="checkbox-inline">
+              <input type="checkbox" name="attach_pdf" {% if prefill_reminder.attach_pdf %}checked{% endif %} />
+              Přiložit PDF
+            </label>
+            <label class="checkbox-inline">
+              <input type="checkbox" name="include_public_link" {% if prefill_reminder.include_public_link %}checked{% endif %} />
+              Přidat veřejný odkaz
+            </label>
+          </div>
+          <p class="muted">
+            Odesílatel:
+            {% if smtp_from_name %}{{ smtp_from_name }} {% endif %}&lt;{{ smtp_from_email }}&gt;
+            {% if smtp_host %} ({{ smtp_host }}{% if smtp_port %}:{{ smtp_port }}{% endif %}){% endif %}
+          </p>
+            <div class="form-actions">
+              <button class="btn primary" type="submit" onclick="return confirm('Odeslat upomínku?')">Poslat upomínku</button>
+            </div>
+          </form>
+        {% endif %}
+      </div>
+    </details>
+  {% endif %}
+
+  {% if invoice.status != 'draft' %}
+    <dialog class="app-dialog" id="send-email-dialog">
+      <div class="app-dialog-card">
+        <div class="app-dialog-head">
+          <div>
+            <p class="page-kicker">Komunikace</p>
+            <h3>Odeslat e-mailem</h3>
+          </div>
+          <button class="btn small" type="button" data-dialog-close="send-email-dialog">Zavřít</button>
+        </div>
+        <div class="app-dialog-body">
+          {% if not smtp_ready %}
+            <p class="muted">SMTP není nastavené. Doplň <code>SMTP_HOST</code> a případně <code>SMTP_USERNAME</code>, <code>SMTP_PASSWORD</code> a <code>SMTP_FROM_EMAIL</code>.</p>
+          {% else %}
+            <form method="post" action="/invoices/{{ invoice.id }}/email" class="form">
+              {{ csrf_input(request)|safe }}
+            <div class="form-row">
+              <label for="to_email">Komu</label>
+              <input id="to_email" name="to_email" required value="{{ prefill_email.to_email }}" />
+              <div class="muted">Lze zadat více adres oddělených čárkou nebo středníkem.</div>
+              {% if contact_email_list %}
+                <div class="recipient-shortcuts">
+                  {% for email in contact_email_list %}
+                    <button class="btn small" type="button" data-fill-target="to_email" data-fill-value="{{ email }}">{{ email }}</button>
+                  {% endfor %}
+                  {% if contact_email_joined and (contact_email_list|length > 1) %}
+                    <button class="btn small" type="button" data-fill-target="to_email" data-fill-value="{{ contact_email_joined }}">Všechny kontaktní e-maily</button>
+                  {% endif %}
+                </div>
+              {% endif %}
+            </div>
+            <div class="form-row">
+              <label for="cc_email">Kopie (CC)</label>
+              <input id="cc_email" name="cc_email" value="{{ prefill_email.cc_email or '' }}" />
+              <div class="muted">Volitelné. Můžeš zadat vlastní adresu nebo účetní/obchodní kopii.</div>
+              {% if copy_to_self_email %}
+                <div class="recipient-shortcuts">
+                  <button class="btn small" type="button" data-fill-target="cc_email" data-fill-value="{{ copy_to_self_email }}">Kopie mně</button>
+                </div>
+              {% endif %}
+            </div>
+            <div class="form-row">
+              <label for="subject">Předmět</label>
+              <input id="subject" name="subject" required value="{{ prefill_email.subject }}" />
+            </div>
+            <div class="form-row">
+              <label for="body">Text</label>
+              <textarea id="body" name="body" rows="8">{{ prefill_email.body }}</textarea>
+            </div>
+            <div class="form-row">
+              <label class="checkbox-inline">
+                <input type="checkbox" name="attach_pdf" {% if prefill_email.attach_pdf %}checked{% endif %} />
+                Přiložit PDF
+              </label>
+              <label class="checkbox-inline">
+                <input type="checkbox" name="include_public_link" {% if prefill_email.include_public_link %}checked{% endif %} />
+                Přidat veřejný odkaz
+              </label>
+            </div>
+            <p class="muted">
+              Odesílatel:
+              {% if smtp_from_name %}{{ smtp_from_name }} {% endif %}&lt;{{ smtp_from_email }}&gt;
+              {% if smtp_host %} ({{ smtp_host }}{% if smtp_port %}:{{ smtp_port }}{% endif %}){% endif %}
+            </p>
+              <div class="form-actions">
+                <button class="btn primary" type="submit" onclick="return confirm('Odeslat e-mail?')">Odeslat</button>
+              </div>
+            </form>
+          {% endif %}
+        </div>
+      </div>
+    </dialog>
+
+  {% endif %}
+
+  <script>
+    document.querySelectorAll('[data-dialog-open]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var dialogId = btn.getAttribute('data-dialog-open');
+        var dialog = document.getElementById(dialogId);
+        if (!dialog) return;
+        if (typeof dialog.showModal === 'function') {
+          dialog.showModal();
+        } else {
+          dialog.setAttribute('open', 'open');
+        }
+      });
+    });
+
+    document.querySelectorAll('[data-dialog-close]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var dialogId = btn.getAttribute('data-dialog-close');
+        var dialog = document.getElementById(dialogId);
+        if (!dialog) return;
+        dialog.close();
+      });
+    });
+
+    document.querySelectorAll('.app-dialog').forEach(function (dialog) {
+      dialog.addEventListener('click', function (event) {
+        var rect = dialog.getBoundingClientRect();
+        var inside = (
+          rect.top <= event.clientY &&
+          event.clientY <= rect.top + rect.height &&
+          rect.left <= event.clientX &&
+          event.clientX <= rect.left + rect.width
+        );
+        if (!inside) dialog.close();
+      });
+    });
+
+    document.querySelectorAll('[data-fill-target]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var targetId = btn.getAttribute('data-fill-target');
+        var target = document.getElementById(targetId);
+        if (!target) return;
+        target.value = btn.getAttribute('data-fill-value') || '';
+        target.focus();
+      });
+    });
+
+    document.querySelectorAll('[data-copy-public-url]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var url = btn.getAttribute('data-copy-public-url') || '';
+        var originalText = btn.textContent;
+        var markCopied = function () {
+          btn.textContent = 'Zkopírováno';
+          window.setTimeout(function () { btn.textContent = originalText; }, 1400);
+        };
+        var copyFallback = function () {
+          var area = document.createElement('textarea');
+          area.value = url;
+          area.setAttribute('readonly', 'readonly');
+          area.style.position = 'fixed';
+          area.style.left = '-9999px';
+          document.body.appendChild(area);
+          area.select();
+          try {
+            if (document.execCommand('copy')) {
+              document.body.removeChild(area);
+              markCopied();
+              return;
+            }
+          } catch (_err) {}
+          document.body.removeChild(area);
+          window.prompt('Veřejný odkaz', url);
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(url).then(markCopied).catch(copyFallback);
+          return;
+        }
+        copyFallback();
+      });
+    });
+  </script>
+
+    <div class="card invoice-audit-history">
+    <h3>Historie změn</h3>
+    {% if audit_entries %}
+      <div class="invoice-audit-list">
+        {% for entry in audit_entries %}
+          <div class="invoice-audit-item">
+            <div class="invoice-audit-item-head">
+              <strong>{{ entry.title }}</strong>
+              <span class="muted">{{ entry.created_at or '—' }}</span>
+            </div>
+            {% if entry.details %}
+              <div class="muted invoice-audit-details">{{ entry.details }}</div>
+            {% endif %}
+            {% if entry.user_id %}
+              <div class="muted invoice-audit-details">uživatel #{{ entry.user_id }}</div>
+            {% endif %}
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="muted">Zatím bez zapsané historie.</p>
+    {% endif %}
+    </div>
+  </section>
+{% endblock %}

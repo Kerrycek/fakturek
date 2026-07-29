@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+
+{% block title %}Přihlášení – fakturek{% endblock %}
+
+{% block head_extra %}
+  <style>
+    .login-page-wrap {
+      min-height: calc(100vh - 15rem);
+      display: flex;
+      align-items: flex-start;
+      padding-top: clamp(2.5rem, 7vh, 5rem);
+    }
+
+    .login-panel {
+      width: min(100%, 38rem);
+    }
+
+    .login-panel .card-body {
+      padding: clamp(1.25rem, 3vw, 2rem);
+    }
+
+    .login-heading {
+      max-width: 32rem;
+      margin-bottom: 1.75rem;
+    }
+
+    .login-heading .page-kicker {
+      margin-bottom: .45rem;
+    }
+
+    .login-heading h1 {
+      margin-bottom: .5rem;
+    }
+
+    .login-heading p {
+      margin: 0;
+      color: var(--tblr-secondary);
+    }
+
+    .login-footer-note {
+      margin-top: 1rem;
+    }
+
+    @media (max-width: 767.98px) {
+      .login-page-wrap {
+        min-height: auto;
+        padding-top: 1.5rem;
+      }
+
+      .login-panel .card-body {
+        padding: 1.25rem;
+      }
+    }
+  </style>
+{% endblock %}
+
+{% block content %}
+  <section class="login-page-wrap">
+    <div class="login-panel stack-md">
+      {% if bootstrap_credentials %}
+        <div class="card stack-sm">
+          <p><strong>Počáteční přihlašovací údaje</strong></p>
+          <p>Uživatel: <code>{{ bootstrap_credentials.username }}</code></p>
+          {% if bootstrap_credentials.password %}
+            <p>Heslo: <code>{{ bootstrap_credentials.password }}</code></p>
+          {% else %}
+            <p class="muted"><small>Heslo není zveřejněné v UI; použij bootstrap hodnotu z deploymentu.</small></p>
+          {% endif %}
+        </div>
+      {% endif %}
+
+      {% if not db_enabled %}
+        <div class="card stack-sm">
+          <p><strong>Databáze není dostupná – přihlášení je vypnuté.</strong></p>
+          {% if db_error %}
+            <p class="muted"><small>{{ db_error }}</small></p>
+          {% endif %}
+        </div>
+      {% endif %}
+
+      {% if error %}
+        <div class="notice error">
+          <p><strong>{{ error }}</strong></p>
+        </div>
+      {% endif %}
+
+      {% if info %}
+        <div class="notice success">
+          <p>{{ info }}</p>
+        </div>
+      {% endif %}
+
+      <div class="card">
+        <div class="card-body">
+          <div class="login-heading">
+            <p class="page-kicker">Fakturek.cz</p>
+            <h1>Přihlášení do Fakturku</h1>
+            <p>Zadej své údaje a pokračuj do správy faktur, kontaktů a nastavení.</p>
+          </div>
+
+          <form class="form" method="post" action="/login">
+            {{ csrf_input(request)|safe }}
+            <div class="form-row">
+              <label for="identifier">Uživatel nebo e-mail</label>
+              <input
+                id="identifier"
+                name="identifier"
+                value="{{ prefill.identifier }}"
+                autocomplete="username"
+                {% if db_enabled %}autofocus{% endif %}
+              />
+            </div>
+
+            <div class="form-row">
+              <label for="password">Heslo</label>
+              <input
+                id="password"
+                type="password"
+                name="password"
+                autocomplete="current-password"
+              />
+            </div>
+
+            <input type="hidden" name="next" value="{{ next_url }}" />
+
+            <div class="form-actions">
+              <button class="btn primary" type="submit" {% if not db_enabled %}disabled{% endif %}>Přihlásit</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      {% if verification_pending_email %}
+        <div class="card stack-sm">
+          <p><strong>Potřebuješ nový potvrzovací odkaz?</strong></p>
+          <p class="muted"><small>Pošlu ho znovu na <code>{{ verification_pending_email }}</code>.</small></p>
+          <form class="form" method="post" action="/signup/resend-verification">
+            {{ csrf_input(request)|safe }}
+            <input type="hidden" name="email" value="{{ verification_pending_email }}" />
+            <input type="hidden" name="next" value="{{ next_url }}" />
+            <div class="form-actions">
+              <button class="btn" type="submit">Poslat nový potvrzovací e-mail</button>
+            </div>
+          </form>
+        </div>
+      {% endif %}
+
+      {% if signup_enabled %}
+        <p class="muted login-footer-note">
+          Nemáš účet? <a href="/signup">Založit účet a první IČO</a>.
+        </p>
+      {% endif %}
+
+      <p class="muted login-footer-note">
+        Zapomněl(a) jsi heslo? <a href="/password/reset">Nastavit nové heslo</a>.
+      </p>
+
+      {% if setup_available %}
+        <p class="muted login-footer-note">
+          V databázi zatím není žádný uživatel.
+          <a href="/setup">Vytvořit první účet platformy</a>.
+          {% if setup_requires_token %}
+            (V produkci je potřeba <code>SETUP_TOKEN</code>.)
+          {% endif %}
+        </p>
+      {% endif %}
+    </div>
+  </section>
+{% endblock %}

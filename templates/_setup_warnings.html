@@ -1,0 +1,37 @@
+{% set _setup_warnings = setup_warnings or [] %}
+{% set refresh_count = (issued_pdf_refresh_count or 0)|int %}
+{% set _show_refresh_action = show_pdf_refresh_action if show_pdf_refresh_action is defined else (_setup_warnings|length > 0) %}
+{% if _setup_warnings or (_show_refresh_action and refresh_count > 0) %}
+  <div class="setup-warning-stack" role="status" aria-live="polite">
+    {% for warning in _setup_warnings %}
+      <section class="notice warning setup-warning-card setup-warning-card-{{ warning.code or warning.kind or 'warning' }}">
+        <div class="setup-warning-copy">
+          <strong>{{ warning.title }}</strong>
+          <p>{{ warning.message or warning.text }}</p>
+          {% if warning.missing %}
+            <p class="setup-warning-missing">Chybí: {{ warning.missing }}</p>
+          {% endif %}
+        </div>
+        {% if warning.url %}
+          <a class="btn small setup-warning-link" href="{{ warning.url }}">{{ warning.action_label or warning.action or "Opravit v nastavení" }}</a>
+        {% endif %}
+      </section>
+    {% endfor %}
+
+    {% if _show_refresh_action and refresh_count > 0 %}
+      <section class="setup-warning-refresh-card">
+        <div class="setup-warning-copy">
+          <strong>Už vystavené faktury</strong>
+          <p>Po úpravě fakturačních údajů nebo banky můžeš přegenerovat uložená PDF z aktuálního nastavení.</p>
+        </div>
+        <form method="post" action="/invoices/regenerate-issued-pdfs" class="setup-warning-refresh-form">
+          {{ csrf_input(request)|safe }}
+          <input type="hidden" name="next" value="{{ next_url or request.url.path }}" />
+          <button class="btn small" type="submit" onclick="return confirm('Přegenerovat PDF u všech vystavených faktur z aktuálního nastavení?')">
+            Přegenerovat {{ refresh_count }} PDF
+          </button>
+        </form>
+      </section>
+    {% endif %}
+  </div>
+{% endif %}

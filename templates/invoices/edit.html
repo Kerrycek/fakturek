@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block title %}{{ page_title if page_title is defined else 'Upravit doklad' }} – fakturek{% endblock %}
+
+{% block content %}
+  {% set page_title = page_title if page_title is defined else "Faktura " ~ invoice.number %}
+  {% if page_subtitle is defined %}
+    {% set page_subtitle = page_subtitle %}
+  {% elif invoice.status == 'draft' %}
+    {% set page_subtitle = "Uprav hlavičku i položky konceptu na jedné obrazovce." %}
+  {% else %}
+    {% set page_subtitle = "Fakturu můžeš upravit i po vystavení. Finální číslo zůstává zachované a změny se zapíšou do historie." %}
+  {% endif %}
+  {% set submit_label = submit_label if submit_label is defined else "Uložit změny" %}
+  {% set back_url = back_url if back_url is defined else "/invoices" %}
+  {% set form_action = form_action if form_action is defined else "/invoices/" ~ invoice.id ~ "/edit" %}
+  {% include "invoices/_editor.html" %}
+
+  <div class="invoice-editor-secondary-actions">
+    <form method="post" action="/invoices/{{ invoice.id }}/duplicate" style="display:inline">
+      {{ csrf_input(request)|safe }}
+      <button class="btn" type="submit">Duplikovat doklad</button>
+    </form>
+
+    {% if (invoice.document_type or 'invoice') == 'invoice' and invoice.status != 'draft' %}
+      <form method="post" action="/invoices/{{ invoice.id }}/credit-note" style="display:inline">
+        {{ csrf_input(request)|safe }}
+        <button class="btn" type="submit">Vystavit dobropis</button>
+      </form>
+    {% endif %}
+
+    {% if invoice.status in ['issued', 'sent', 'paid'] %}
+      <form method="post" action="/invoices/{{ invoice.id }}/status" style="display:inline">
+        {{ csrf_input(request)|safe }}
+        <input type="hidden" name="status" value="cancelled" />
+        <input type="hidden" name="next" value="/invoices/{{ invoice.id }}" />
+        <button class="btn" type="submit" onclick="return confirm('Opravdu stornovat tento doklad?')">Stornovat</button>
+      </form>
+    {% endif %}
+
+    {% if invoice.status == 'draft' %}
+      <form method="post" action="/invoices/{{ invoice.id }}/issue" style="display:inline">
+        {{ csrf_input(request)|safe }}
+        <button class="btn primary" type="submit" onclick="return confirm('Vystavit doklad a přidělit finální číslo?')">
+          {% if (invoice.document_type or 'invoice') == 'quote' %}Vystavit nabídku{% elif (invoice.document_type or 'invoice') == 'credit_note' %}Vystavit dobropis{% elif (invoice.document_type or 'invoice') == 'proforma' %}Vystavit zálohovou fakturu{% else %}Vystavit fakturu{% endif %}
+        </button>
+      </form>
+
+      <form method="post" action="/invoices/{{ invoice.id }}/delete" style="display:inline">
+        {{ csrf_input(request)|safe }}
+        <button class="btn" type="submit" onclick="return confirm('Opravdu smazat tento doklad? Tato akce nejde vrátit zpět.')">Smazat doklad</button>
+      </form>
+    {% else %}
+      <div class="card" style="margin-top:1rem;">
+        <p><strong>Poznámka:</strong> doklad je už vystavený, ale zůstává editovatelný. Každá změna se propíše do historie pod dokladem a PDF se znovu vygeneruje.</p>
+      </div>
+    {% endif %}
+  </div>
+{% endblock %}

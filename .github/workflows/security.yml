@@ -1,0 +1,46 @@
+name: security
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test-and-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements.txt -r requirements-dev.txt pip-audit cyclonedx-bom detect-secrets
+      - run: python -m playwright install --with-deps chromium
+      - run: python -m compileall -q fakturek alembic
+      - run: ./tools/verify_public_release.py
+      - run: pip check
+      - run: pytest -q
+      - run: pip-audit --no-deps --disable-pip -r requirements.lock
+      - run: cyclonedx-py requirements requirements.lock --output-file sbom.cdx.json
+      - name: Reject new potential secrets
+        run: |
+          detect-secrets scan --baseline .secrets.baseline \
+            --exclude-files '(^|/)(\.git|\.venv|\.pytest_cache|\.ruff_cache|static/vendor|requirements\.lock)(/|$)'
+          python - <<'PY'
+          import json
+
+          results = json.load(open('.secrets.baseline'))['results']
+          unaudited = [
+              (path, item['line_number'], item['type'])
+              for path, findings in results.items()
+              for item in findings
+              if item.get('is_secret') is not False
+          ]
+          assert not unaudited, f'Unaudited potential secrets: {unaudited}'
+          PY
+      - name: Upload SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fakturek-sbom
+          path: sbom.cdx.json
+      - run: cp .env.example .env
+      - run: MARIADB_ROOT_PASSWORD=ci-root MARIADB_DATABASE=fakturek MARIADB_USER=fakturek MARIADB_PASSWORD=ci-db docker compose config >/dev/null

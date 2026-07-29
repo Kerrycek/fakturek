@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+
+{% block title %}{{ contact.name }} – Kontakt – fakturek{% endblock %}
+
+{% block content %}
+  <section class="stack-lg">
+    <a class="backlink" href="/contacts">← Kontakty</a>
+
+    <div class="page-header">
+      <div class="page-header-copy">
+        <p class="page-kicker">Kontakt</p>
+        <h1>{{ contact.name }}</h1>
+        <p>Detail odběratele, rychlá návaznost na vystavení faktury a přehled dosavadních dokladů.</p>
+      </div>
+      <div class="page-header-actions">
+        <a class="btn primary" href="/invoices/new?contact_id={{ contact.id }}">+ Nová faktura pro kontakt</a>
+        <a class="btn" href="/contacts/{{ contact.id }}/edit">Upravit kontakt</a>
+      </div>
+    </div>
+
+    {% if notice %}
+      <p class="notice"><strong>Info:</strong> {{ notice }}</p>
+    {% endif %}
+
+    {% if error %}
+      <p class="notice error"><strong>Chyba:</strong> {{ error }}</p>
+    {% endif %}
+
+    <div class="card">
+      <div class="info-grid contact-detail-info-grid">
+        <div class="info-pair">
+          <span>E-mail</span>
+          <div>
+            {% if contact_email_list %}
+              {% for email in contact_email_list %}
+                <a href="mailto:{{ email }}">{{ email }}</a>{% if not loop.last %}, {% endif %}
+              {% endfor %}
+            {% else %}
+              —
+            {% endif %}
+          </div>
+        </div>
+        <div class="info-pair">
+          <span>Telefon</span>
+          <strong>{{ contact.phone or "—" }}</strong>
+        </div>
+        <div class="info-pair">
+          <span>Adresa</span>
+          <div>
+            {{ contact.street or "" }}
+            {% if contact.city %}, {{ contact.city }}{% endif %}
+            {% if contact.zip %}, {{ contact.zip }}{% endif %}
+            {% if contact.country %}, {{ contact.country }}{% endif %}
+          </div>
+        </div>
+        <div class="info-pair">
+          <span>IČO / DIČ</span>
+          <div>{{ contact.ico or "—" }}{% if contact.dic %} · {{ contact.dic }}{% endif %}</div>
+        </div>
+        <div class="info-pair">
+          <span>Pevný VS</span>
+          <strong>{{ contact.fixed_variable_symbol or "—" }}</strong>
+        </div>
+      </div>
+    </div>
+
+    <details class="card contact-registry-disclosure">
+      <summary class="contact-registry-summary">
+        <span class="contact-registry-summary-copy">
+          <span class="page-kicker">Registry</span>
+          <strong>ARES / RPO kontrola</strong>
+        </span>
+        <span class="contact-registry-summary-meta">
+          <span>Poslední kontrola: {{ contact.registry_last_checked_at or "—" }}</span>
+          <i class="ti ti-chevron-down" aria-hidden="true"></i>
+        </span>
+      </summary>
+      <div class="contact-registry-body stack-sm">
+        <div class="dashboard-section-head">
+          <div>
+            <p class="page-kicker">Registry</p>
+            <h2>ARES / RPO kontrola</h2>
+          </div>
+          <form method="post" action="/contacts/{{ contact.id }}/registry-sync">
+            {{ csrf_input(request)|safe }}
+            <button class="btn" type="submit">Zkontrolovat teď</button>
+          </form>
+        </div>
+        <div class="info-grid contact-detail-info-grid">
+          <div class="info-pair"><span>Automatické kontroly</span><strong>{% if contact.registry_auto_update %}Zapnuto{% else %}Vypnuto{% endif %}</strong></div>
+          <div class="info-pair"><span>Poslední kontrola</span><strong>{{ contact.registry_last_checked_at or "—" }}</strong></div>
+          <div class="info-pair"><span>Poslední změna</span><strong>{{ contact.registry_last_changed_at or "—" }}</strong></div>
+          <div class="info-pair"><span>Zdroj</span><strong>{{ contact.registry_last_source or "—" }}</strong></div>
+          <div class="info-pair"><span>Aktualizací</span><strong>{{ contact.registry_update_count or 0 }}</strong></div>
+        </div>
+        {% if contact.registry_last_error %}<p class="notice error"><strong>Poslední chyba:</strong> {{ contact.registry_last_error }}</p>{% endif %}
+      </div>
+    </details>
+
+    <div class="page-header-copy">
+      <p class="page-kicker">Doklady</p>
+      <h2>Faktury</h2>
+    </div>
+
+    {% if invoices %}
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Číslo</th>
+              <th>Vystaveno</th>
+              <th>Splatnost</th>
+              <th>Stav</th>
+              <th>Celkem</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for inv in invoices %}
+              <tr>
+                <td><a href="/invoices/{{ inv.id }}">{{ inv.number }}</a></td>
+                <td>{{ inv.issue_date }}</td>
+                <td>{{ inv.due_date }}</td>
+                <td>{{ inv.status }}</td>
+                <td>{{ inv.total_cents | money(inv.currency) }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="empty-state">Zatím žádné faktury pro tento kontakt.</div>
+    {% endif %}
+  </section>
+{% endblock %}

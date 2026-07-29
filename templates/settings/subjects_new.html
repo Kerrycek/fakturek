@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+
+{% block title %}Přidat subjekt – fakturek{% endblock %}
+
+{% block content %}
+  <section class="settings-shell settings-detail-shell">
+    <a class="backlink" href="/settings#subjects-admin">← Zpět na subjekty</a>
+
+    <div class="card settings-hero">
+      <div>
+        <p class="dashboard-eyebrow">Subjekty</p>
+        <h1>Přidat další IČO</h1>
+        <p class="muted">Nový subjekt bude mít vlastní fakturační údaje, číselné řady, kontakty a nastavení.</p>
+      </div>
+    </div>
+
+    {% if info %}
+      <div class="card settings-notice settings-notice-success">{{ info }}</div>
+    {% endif %}
+    {% if error %}
+      <div class="card settings-notice settings-notice-error"><strong>Chyba:</strong> {{ error }}</div>
+    {% endif %}
+
+    <div class="card settings-card">
+      <form method="post" action="/settings/subjects/create" class="form settings-form-wide">
+        {{ csrf_input(request)|safe }}
+        <input type="hidden" name="next" value="/settings#subjects-admin" />
+
+        <div class="settings-form-grid">
+          <div class="form-row">
+            <label for="subject_name">Název subjektu</label>
+            <input id="subject_name" name="name" value="{{ subject_prefill.name }}" required />
+          </div>
+
+          <div class="form-row">
+            <label for="subject_email">Email</label>
+            <input id="subject_email" name="email" type="email" value="{{ subject_prefill.email }}" />
+          </div>
+
+          <div class="form-row">
+            <label for="subject_phone">Telefon</label>
+            <input id="subject_phone" name="phone" value="{{ subject_prefill.phone }}" />
+          </div>
+
+          <div class="form-row">
+            <label for="subject_street">Ulice</label>
+            <input id="subject_street" name="street" value="{{ subject_prefill.street }}" />
+          </div>
+
+          <div class="form-row">
+            <label for="subject_city">Město</label>
+            <input id="subject_city" name="city" value="{{ subject_prefill.city }}" />
+          </div>
+
+          <div class="form-row">
+            <label for="subject_zip">PSČ</label>
+            <input id="subject_zip" name="zip" value="{{ subject_prefill.zip }}" />
+          </div>
+
+          <div class="form-row">
+            <label for="subject_country">Země</label>
+            <input id="subject_country" name="country" maxlength="2" value="CZ" readonly />
+            <small class="muted">Další subjekt může být zatím jen české IČO / český vystavovatel.</small>
+          </div>
+
+          <div class="form-row">
+            <label for="subject_ico">IČO</label>
+            <input id="subject_ico" name="ico" value="{{ subject_prefill.ico }}" />
+          </div>
+
+          <div class="form-row">
+            <label for="subject_dic">DIČ</label>
+            <input id="subject_dic" name="dic" value="{{ subject_prefill.dic }}" />
+          </div>
+
+          <div class="form-row">
+            <label for="subject_default_currency">Výchozí měna</label>
+            <select id="subject_default_currency" name="default_currency">
+              {% for code, label in (currency_options or []) %}
+                <option value="{{ code }}" {% if (subject_prefill.default_currency or issuer.default_currency or 'CZK') == code %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="form-row form-row-checkbox settings-checkbox-card">
+            <input id="subject_is_vat_payer" name="is_vat_payer" type="checkbox" value="1" {% if subject_prefill.is_vat_payer %}checked{% endif %} />
+            <label for="subject_is_vat_payer">
+              <strong>Plátce DPH</strong>
+              <span>Na fakturách se budou zobrazovat sazby DPH a DUZP.</span>
+            </label>
+          </div>
+
+          <div class="form-row form-row-checkbox settings-checkbox-card">
+            <input id="subject_is_vat_identified_person" name="is_vat_identified_person" type="checkbox" value="1" {% if subject_prefill.is_vat_identified_person %}checked{% endif %} />
+            <label for="subject_is_vat_identified_person">
+              <strong>Identifikovaná osoba k DPH</strong>
+              <span>Pro zvláštní režim identifikované osoby bez běžného plátcovství.</span>
+            </label>
+          </div>
+
+          <div class="form-row form-row-checkbox settings-checkbox-card">
+            <input id="subject_switch_after_create" name="switch_after_create" type="checkbox" value="1" {% if subject_prefill.switch_after_create is not defined or subject_prefill.switch_after_create %}checked{% endif %} />
+            <label for="subject_switch_after_create">
+              <strong>Po vytvoření přepnout</strong>
+              <span>Po uložení rovnou otevřít nově vytvořený subjekt.</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn" type="submit" name="lookup_registry" value="1" formnovalidate>Načíst z registru</button>
+          <button class="btn primary" type="submit" id="subject_create_submit">Vytvořit subjekt</button>
+        </div>
+      </form>
+    </div>
+  </section>
+{% endblock %}

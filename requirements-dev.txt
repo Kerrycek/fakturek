@@ -1,0 +1,5 @@
+pytest==8.2.2
+httpx==0.28.1
+ruff==0.15.1
+pypdf==6.14.2
+playwright==1.60.0

@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+
+{% block title %}{{ page_title if page_title is defined else 'Nový doklad' }} – fakturek{% endblock %}
+
+{% block content %}
+  {% set page_title = page_title if page_title is defined else "Nová faktura" %}
+  {% set page_subtitle = page_subtitle if page_subtitle is defined else "Vytvoř koncept faktury pohodlně v jednom editoru – bez skákání na detail kvůli položkám." %}
+  {% set submit_label = submit_label if submit_label is defined else "Vytvořit koncept" %}
+  {% set back_url = back_url if back_url is defined else "/invoices" %}
+  {% set form_action = form_action if form_action is defined else "/invoices/new" %}
+  {% include "invoices/_editor.html" %}
+{% endblock %}

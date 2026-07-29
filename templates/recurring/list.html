@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+
+{% block title %}Automatické faktury – fakturek{% endblock %}
+
+{% block content %}
+  <section class="stack-lg">
+    <div class="page-header">
+      <div class="page-header-copy">
+        <p class="page-kicker">Opakování</p>
+        <h1>Automatické faktury</h1>
+        <p>Správa všech opakovaných dokladů na jednom místě. Nové opakování můžeš založit z detailu konkrétní faktury nebo rovnou jako úplně novou automatickou fakturu.</p>
+      </div>
+      <div class="page-header-actions">
+        <a class="btn primary" href="{{ recurring_create_url or '/invoices/new?recurring_mode=1' }}">+ Nová automatická faktura</a>
+        <a class="btn" href="/invoices">Zpět na faktury</a>
+      </div>
+    </div>
+
+    {% if notice %}
+      <p class="notice success">{{ notice }}</p>
+    {% endif %}
+
+    {% if error %}
+      <p class="notice error"><strong>Chyba:</strong> {{ error }}</p>
+    {% endif %}
+
+    <section class="card stack-sm">
+      <div class="dashboard-section-head">
+        <div>
+          <p class="dashboard-eyebrow">Přehled</p>
+          <h3>Aktivní a pozastavená opakování</h3>
+        </div>
+      </div>
+      {% if recurring_plans %}
+        <div class="stack-sm">
+          {% for plan in recurring_plans %}
+            <div class="info-grid recurring-plan-row" style="align-items:center;">
+              <div class="info-pair">
+                <span>{{ plan.name }}</span>
+                <strong>{{ plan.template_number or 'Šablona' }}</strong>
+              </div>
+              <div class="info-pair">
+                <span>Další vystavení</span>
+                <strong>{{ plan.next_issue_date or '—' }}</strong>
+              </div>
+              <div class="info-pair">
+                <span>Režim</span>
+                <strong>
+                  {% if plan.interval_unit == 'week' %}každý {{ plan.interval_count }}. týden{% else %}každý {{ plan.interval_count }}. měsíc{% endif %}
+                </strong>
+              </div>
+              <div class="toolbar">
+                <span class="badge {% if plan.is_active %}success{% endif %}">{% if plan.is_active %}aktivní{% else %}pozastavené{% endif %}</span>
+                <a class="btn small primary" href="/recurring/{{ plan.id }}/edit">Upravit</a>
+                <form method="post" action="/recurring/{{ plan.id }}/run">
+                  {{ csrf_input(request)|safe }}
+                  <input type="hidden" name="next" value="/recurring" />
+                  <button class="btn small" type="submit">Spustit teď</button>
+                </form>
+                <form method="post" action="/recurring/{{ plan.id }}/toggle">
+                  {{ csrf_input(request)|safe }}
+                  <input type="hidden" name="next" value="/recurring" />
+                  <button class="btn small" type="submit">{% if plan.is_active %}Pozastavit{% else %}Zapnout{% endif %}</button>
+                </form>
+                <form method="post" action="/recurring/{{ plan.id }}/delete">
+                  {{ csrf_input(request)|safe }}
+                  <input type="hidden" name="next" value="/recurring" />
+                  <button class="btn small" type="submit" onclick="return confirm('Smazat opakování?')">Smazat</button>
+                </form>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="surface-muted recurring-empty-state">
+          <div>
+            <strong>Zatím tu není žádná automatická faktura.</strong>
+            <p class="muted">Můžeš vybrat existující fakturu jako šablonu, nebo si rovnou založit úplně novou automatickou fakturu včetně opakování.</p>
+          </div>
+          <div class="toolbar">
+            <a class="btn primary" href="{{ recurring_create_url or '/invoices/new?recurring_mode=1' }}">+ Nová automatická faktura</a>
+            <a class="btn" href="/invoices">Vybrat existující fakturu</a>
+          </div>
+        </div>
+      {% endif %}
+    </section>
+  </section>
+{% endblock %}

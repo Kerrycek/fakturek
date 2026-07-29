@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }} – fakturek{% endblock %}
+
+{% block content %}
+  <h1>{{ title }}</h1>
+
+  <div class="card">
+    <p><strong>Tato část aplikace vyžaduje databázi.</strong></p>
+    <p>
+      DB je vypnutá, chybí závislosti, nebo je špatně nakonfigurovaná.
+    </p>
+
+    {% if db_error %}
+      <p>
+        <small><strong>Detail:</strong> {{ db_error }}</small>
+      </p>
+    {% endif %}
+
+    <p>
+      Tip: zkontroluj <code>requirements.txt</code>, <code>.env</code> a připojení k DB.
+    </p>
+
+    {{ csrf_input(request)|safe }}
+  </div>
+{% endblock %}

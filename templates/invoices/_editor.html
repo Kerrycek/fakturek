@@ -1,0 +1,2180 @@
+{% macro item_row(item, is_vat_payer=False, zero_money_preview="") -%}
+  <tr class="invoice-item-row" data-item-row>
+    <td class="invoice-item-cell invoice-item-cell-drag">
+      <button
+        type="button"
+        class="invoice-row-drag"
+        data-drag-handle
+        draggable="true"
+        aria-label="Přetáhni položku pro změnu pořadí"
+        title="Přetáhni položku pro změnu pořadí"
+      >
+        <span></span><span></span><span></span>
+      </button>
+    </td>
+    <td class="invoice-item-cell invoice-item-cell-qty">
+      <input
+        name="item_quantity"
+        type="number"
+        step="0.01"
+        min="0.01"
+        value="{{ item.quantity }}"
+        placeholder="1"
+        inputmode="decimal"
+        data-item-quantity
+      />
+    </td>
+    <td class="invoice-item-cell invoice-item-cell-unit">
+      <input
+        name="item_unit"
+        value="{{ item.unit or '' }}"
+        placeholder="ks"
+        list="invoice-unit-options"
+        autocomplete="off"
+        data-item-unit
+      />
+    </td>
+    <td class="invoice-item-cell invoice-item-cell-desc">
+      <div class="invoice-item-desc-field">
+        <input
+          name="item_description"
+          value="{{ item.description }}"
+          placeholder="Např. členský příspěvek / služba / práce"
+          autocomplete="off"
+          data-item-description
+        />
+        <div class="invoice-item-suggestions" data-item-suggestions hidden></div>
+      </div>
+    </td>
+    <td class="invoice-item-cell invoice-item-cell-price">
+      <input
+        name="item_unit_price"
+        type="number"
+        step="0.01"
+        min="{% if (prefill.document_type or 'invoice') == 'credit_note' %}-999999999{% else %}0{% endif %}"
+        value="{{ item.unit_price }}"
+        placeholder="0.00"
+        inputmode="decimal"
+        data-item-unit-price
+      />
+    </td>
+    {% if is_vat_payer %}
+      <td class="invoice-item-cell invoice-item-cell-vat">
+        {% set vat_ns = namespace(is_preset=false) %}
+        {% for value, label in (vat_rate_options or []) %}
+          {% if (item.vat_rate ~ '') == (value ~ '') %}{% set vat_ns.is_preset = true %}{% endif %}
+        {% endfor %}
+        <div class="invoice-vat-control" data-vat-control>
+          <select data-item-vat-select aria-label="Sazba DPH">
+            {% for value, label in (vat_rate_options or []) %}
+              <option value="{{ value }}" {% if (item.vat_rate ~ '') == (value ~ '') %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+            <option value="custom" {% if item.vat_rate and not vat_ns.is_preset %}selected{% endif %}>Vlastní</option>
+          </select>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            max="100"
+            value="{{ item.vat_rate }}"
+            placeholder="{{ item.vat_rate or '21' }}"
+            inputmode="decimal"
+            data-item-vat-custom
+            {% if not item.vat_rate or vat_ns.is_preset %}hidden{% endif %}
+          />
+          <input type="hidden" name="item_vat_rate" value="{{ item.vat_rate }}" data-item-vat-rate />
+        </div>
+      </td>
+    {% else %}
+      <td style="display:none">
+        <input type="hidden" name="item_vat_rate" value="0" data-item-vat-rate />
+      </td>
+    {% endif %}
+    <td class="invoice-item-cell invoice-item-cell-total">
+      <div class="invoice-item-total" data-item-total>{{ item.total_preview or zero_money_preview }}</div>
+    </td>
+    <td class="invoice-item-cell invoice-item-cell-remove">
+      <div class="invoice-row-actions">
+        <button
+          type="button"
+          class="invoice-row-save-catalog"
+          data-save-catalog-item
+          aria-label="Uložit položku do katalogu"
+          title="Uložit položku do katalogu"
+        >☆</button>
+        <button
+          type="button"
+          class="invoice-row-duplicate"
+          data-duplicate-item
+          aria-label="Duplikovat položku"
+          title="Duplikovat položku"
+        >⎘</button>
+        <button
+          type="button"
+          class="invoice-row-remove"
+          data-remove-item
+          aria-label="Odebrat položku"
+          title="Odebrat položku"
+        >×</button>
+      </div>
+    </td>
+  </tr>
+{%- endmacro %}
+
+{% macro catalog_item_card(item, is_vat_payer=False) -%}
+  <article
+    class="invoice-catalog-item"
+    data-catalog-item-id="{{ item.id }}"
+    data-description="{{ item.description }}"
+    data-quantity="{{ item.quantity }}"
+    data-unit="{{ item.unit or '' }}"
+    data-unit-price="{{ item.unit_price }}"
+    data-vat-rate="{{ item.vat_rate }}"
+    data-currency="{{ item.currency }}"
+  >
+    <div class="invoice-catalog-item-main">
+      <div class="invoice-catalog-item-title">{{ item.description }}</div>
+      <div class="invoice-catalog-item-meta">
+        <span>{{ item.quantity }}{% if item.unit %} {{ item.unit }}{% endif %} × {{ item.unit_price_preview }}</span>
+        {% if is_vat_payer %}<span>DPH {{ item.vat_rate }} %</span>{% endif %}
+        <span>{{ item.currency }}</span>
+      </div>
+    </div>
+    <div class="invoice-catalog-item-actions">
+      <button type="button" class="invoice-catalog-insert" data-apply-catalog-item>Vložit</button>
+      <button
+        type="button"
+        class="invoice-catalog-remove"
+        data-delete-catalog-item="{{ item.id }}"
+        aria-label="Smazat z katalogu"
+        title="Smazat z katalogu"
+      >×</button>
+    </div>
+  </article>
+{%- endmacro %}
+
+<div class="invoice-editor-page">
+  <div class="invoice-editor-page-head">
+    <div>
+      <a class="invoice-editor-backlink" href="{{ back_url }}">← Zpět</a>
+      <h1 class="invoice-editor-title">{{ page_title }}</h1>
+      <p class="invoice-editor-subtitle">
+        {{ page_subtitle or "Připrav hlavičku i položky faktury v jednom kroku." }}
+      </p>
+    </div>
+
+    <div class="invoice-editor-page-actions">
+      {% if invoice %}
+        <a class="btn" href="{{ public_url or ('/invoices/' ~ invoice.id ~ '/print') }}" target="_blank" rel="noopener">Náhled</a>
+        <a class="btn" href="/invoices/{{ invoice.id }}/pdf" target="_blank" rel="noopener">Otevřít PDF</a>
+        <a class="btn" href="/invoices/{{ invoice.id }}/pdf?download=1">Stáhnout PDF</a>
+      {% endif %}
+      <a class="btn" href="{{ back_url }}">Zpět</a>
+    </div>
+  </div>
+
+  {% if notice %}
+    <p class="notice success invoice-editor-notice">{{ notice }}</p>
+  {% endif %}
+
+  {% if error %}
+    <p class="notice error invoice-editor-notice"><strong>Chyba:</strong> {{ error }}</p>
+  {% endif %}
+
+  {% include "_setup_warnings.html" %}
+
+  {% if not contacts %}
+    <div class="invoice-editor-empty-state">
+      <h2>Nejdřív kontakt</h2>
+      <p>Pro vystavení faktury je potřeba založit aspoň jednoho odběratele.</p>
+      <p><a class="btn primary" href="/contacts/new">Vytvořit kontakt</a></p>
+    </div>
+  {% else %}
+    <form
+      method="post"
+      action="{{ form_action }}"
+      class="invoice-editor-form"
+      id="invoice-editor-form"
+      data-is-vat-payer="{{ 1 if is_vat_payer else 0 }}"
+      data-default-vat-rate="{{ default_vat_rate or '21' }}"
+      data-suggestions-url="/invoices/item-suggestions"
+      data-catalog-url="/invoices/catalog-items"
+      data-catalog-delete-template="/invoices/catalog-items/__ID__/delete"
+      data-current-invoice-id="{{ invoice.id if invoice else '' }}"
+      data-autosave-url="/invoices/autosave"
+      data-autosave-enabled="{{ 1 if show_draft_submit and not recurring_mode and not series_locked else 0 }}"
+      data-series-locked="{{ 1 if series_locked else 0 }}"
+    >
+      {{ csrf_input(request)|safe }}
+      <input type="hidden" name="autosave_invoice_id" value="{{ invoice.id if invoice and not series_locked else '' }}" data-autosave-invoice-id />
+      <input type="hidden" name="document_type" value="{{ prefill.document_type or 'invoice' }}" />
+      <input type="hidden" name="source_invoice_id" value="{{ prefill.source_invoice_id or '' }}" />
+      <input type="hidden" name="recurring_mode" value="{{ 1 if recurring_mode else 0 }}" />
+      <datalist id="invoice-unit-options">
+        {% for value, label in (item_unit_options or []) %}
+          {% if value %}
+            <option value="{{ value }}">{{ label }}</option>
+          {% endif %}
+        {% endfor %}
+      </datalist>
+      <div class="invoice-editor-surface">
+        <div class="invoice-editor-layout">
+          <section class="invoice-editor-main">
+            <div class="invoice-editor-fields">
+              <div class="invoice-editor-field-row">
+                <label for="contact_id">Odběratel</label>
+                <div class="invoice-editor-field-control">
+                  <div class="form-row" style="margin-bottom:0.55rem;">
+                    <input
+                      id="contact_search"
+                      type="search"
+                      placeholder="Začni psát název firmy, IČO nebo e-mail"
+                      autocomplete="off"
+                      data-contact-search
+                    />
+                  </div>
+                  <div class="invoice-editor-inline-row">
+                    <select id="contact_id" name="contact_id" required data-contact-select>
+                      <option value="" {% if not prefill.contact_id %}selected{% endif %} disabled>Vyber kontakt</option>
+                      {% for c in contacts %}
+                        <option
+                          value="{{ c.id }}"
+                          {% if prefill.contact_id == c.id %}selected{% endif %}
+                          data-email="{{ c.email or '' }}"
+                          data-phone="{{ c.phone or '' }}"
+                          data-ico="{{ c.ico or '' }}"
+                          data-fixed-variable-symbol="{{ c.fixed_variable_symbol or '' }}"
+                          data-city="{{ c.city or '' }}"
+                          data-street="{{ c.street or '' }}"
+                          data-zip="{{ c.zip or '' }}"
+                          data-country="{{ c.country or '' }}"
+                        >
+                          {{ c.name }}
+                        </option>
+                      {% endfor %}
+                    </select>
+                    <a class="btn small" href="/contacts/new">+ Nový kontakt</a>
+                  </div>
+                  <div class="invoice-editor-hint">Seznam se během psaní filtruje, takže rychle najdeš správného odběratele.</div>
+                  <div class="invoice-contact-preview" id="invoice-contact-preview"></div>
+                  <div class="invoice-party-edit-entry">
+                    <div>
+                      <strong>Fakturační údaje na této faktuře</strong>
+                      <span>Změň název, adresu nebo IČO jen pro tenhle doklad.</span>
+                    </div>
+                    <button class="btn small" type="button" data-invoice-party-dialog-open>Upravit</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="invoice-editor-field-row">
+                <label for="series_id">Číslo dokladu</label>
+                <div class="invoice-editor-field-control">
+                  <div class="invoice-editor-static-field">
+                    {% if invoice and series_locked %}
+                      <div class="invoice-editor-static-main">{{ invoice.number }}</div>
+                      <div class="invoice-editor-static-hint">
+                        Finální číslo už bylo přidělené. Při úpravách vystavené faktury zůstává zachované.
+                      </div>
+                    {% elif invoice %}
+                      <div class="invoice-editor-static-main">{{ invoice.number }}</div>
+                      <div class="invoice-editor-static-hint">
+                        Jde o koncept. Po vystavení se automaticky použije další volné číslo
+                        <strong id="invoice-issued-number-preview">{{ prefill.final_number_preview }}</strong>.
+                      </div>
+                    {% else %}
+                      <div class="invoice-editor-static-main" id="invoice-issued-number-preview">{{ prefill.final_number_preview }}</div>
+                      <div class="invoice-editor-static-hint">
+                        {% if (prefill.document_type or 'invoice') == 'invoice' %}
+                          Po uložení bude faktura rovnou vystavená pod tímto číslem.
+                        {% else %}
+                          Po uložení vznikne koncept. Finální číslo se přidělí automaticky při vystavení.
+                        {% endif %}
+                      </div>
+                    {% endif %}
+                  </div>
+                </div>
+              </div>
+
+              <input type="hidden" id="series_id" name="series_id" value="{{ prefill.series_id or '' }}" />
+              <select hidden aria-hidden="true" tabindex="-1" data-series-select {% if series_locked %}disabled{% endif %}>
+                {% for s in (series_options or []) %}
+                  <option
+                    value="{{ s.id }}"
+                    {% if prefill.series_id == s.id %}selected{% endif %}
+                    data-next-number="{{ s.next_number_preview }}"
+                    data-prefix="{{ s.prefix }}"
+                    data-pad-length="{{ s.pad_length }}"
+                    data-last-counter="{{ s.last_counter }}"
+                    data-last-counter-year="{{ s.last_counter_year if s.last_counter_year is not none else '' }}"
+                  >
+                    {{ s.name }}
+                  </option>
+                {% endfor %}
+              </select>
+
+              <div class="invoice-editor-field-row">
+                <label for="issue_date">Datum vystavení</label>
+                <div class="invoice-editor-field-control">
+                  <input id="issue_date" name="issue_date" type="date" required value="{{ prefill.issue_date }}" data-issue-date />
+                </div>
+              </div>
+
+              {% if is_vat_payer %}
+                <div class="invoice-editor-field-row">
+                  <label for="taxable_supply_date">DUZP</label>
+                  <div class="invoice-editor-field-control">
+                    <input id="taxable_supply_date" name="taxable_supply_date" type="date" required value="{{ prefill.taxable_supply_date or prefill.issue_date }}" data-taxable-supply-date />
+                    <div class="invoice-editor-hint">Datum uskutečnění zdanitelného plnění. Pokud ho nezměníš, zůstane stejné jako datum vystavení.</div>
+                  </div>
+                </div>
+              {% endif %}
+
+              <div class="invoice-editor-field-row">
+                <label for="due_term">Splatnost</label>
+                <div class="invoice-editor-field-control invoice-editor-due-grid">
+                  <select id="due_term" name="due_term" data-due-term>
+                    {% for value, label in due_term_options %}
+                      <option value="{{ value }}" {% if prefill.due_term == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                    <option value="custom" {% if prefill.due_term == 'custom' %}selected{% endif %}>Vlastní datum</option>
+                  </select>
+                  <input id="due_date" name="due_date" type="date" required value="{{ prefill.due_date }}" data-due-date />
+                  <div class="invoice-editor-hint" id="due-date-hint">Můžeš nechat termín, nebo ručně nastavit vlastní datum.</div>
+                </div>
+              </div>
+
+              <div class="invoice-editor-field-row">
+                <label for="currency">Měna</label>
+                <div class="invoice-editor-field-control">
+                  <select id="currency" name="currency" data-currency-input>
+                    {% for code, label in (currency_options or []) %}
+                      <option value="{{ code }}" {% if prefill.currency == code %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                  </select>
+                  <div class="invoice-editor-hint">Vyber měnu pro částky, přehled i PDF.</div>
+                </div>
+              </div>
+
+              <div class="invoice-editor-field-row">
+                <label for="invoice_language">Jazyk faktury</label>
+                <div class="invoice-editor-field-control">
+                  <select id="invoice_language" name="invoice_language">
+                    {% for value, label in (invoice_language_options or []) %}
+                      <option value="{{ value }}" {% if (prefill.invoice_language or 'cs') == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                  </select>
+                  <div class="invoice-editor-hint">Přepne veřejný náhled, PDF i výchozí e-mail do zvoleného jazyka.</div>
+                </div>
+              </div>
+
+              <input id="invoice_style" name="invoice_style" type="hidden" value="{{ prefill.invoice_style or 'modern' }}" />
+
+              <div class="invoice-editor-field-row">
+                <label for="payment_method">Způsob platby</label>
+                <div class="invoice-editor-field-control">
+                  <select id="payment_method" name="payment_method">
+                    {% for value, label in (payment_method_options or []) %}
+                      <option value="{{ value }}" {% if (prefill.payment_method or 'bank_transfer') == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                  </select>
+                  <div class="invoice-editor-hint">
+                    U převodu se do PDF propíše účet i QR. U hotovosti, karty a dobírky zůstane platební blok kratší.
+                  </div>
+                </div>
+              </div>
+
+              <div class="invoice-editor-field-row invoice-editor-bank-account-row">
+                <label for="bank_account_id">Bankovní účet</label>
+                <div class="invoice-editor-field-control">
+                  <select id="bank_account_id" name="bank_account_id">
+                    <option value="" {% if not prefill.bank_account_id %}selected{% endif %}>Bez bankovního účtu</option>
+                    {% for acc in (account_options or []) %}
+                      <option value="{{ acc.id }}" {% if (prefill.bank_account_id ~ '') == (acc.id ~ '') %}selected{% endif %}>
+                        {{ acc.label }}{% if acc.currency %} · {{ acc.currency }}{% endif %}{% if acc.display %} — {{ acc.display }}{% endif %}{% if acc.is_default %} (výchozí){% endif %}
+                      </option>
+                    {% endfor %}
+                  </select>
+                  <div class="invoice-editor-hint">
+                    Na faktuře se uloží snapshot účtu pro PDF, veřejný odkaz, e-mail i QR platbu.
+                    {% if not account_options %}<a href="/settings#bank-accounts">Přidat účet v nastavení</a>.{% endif %}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <dialog class="app-dialog invoice-party-dialog" id="invoice-party-dialog">
+              <div class="app-dialog-card invoice-party-dialog-card">
+                <div class="app-dialog-head">
+                  <div>
+                    <p class="dashboard-eyebrow">Údaje na dokladu</p>
+                    <h2>Odběratel na této faktuře</h2>
+                  </div>
+                  <button class="btn small" type="button" data-invoice-party-dialog-close>Zavřít</button>
+                </div>
+                <div class="app-dialog-body invoice-party-dialog-body">
+                <p class="invoice-editor-hint">
+                  Změny v téhle sekci se uloží jen na konkrétní fakturu. Kontakt se tím nezmění.
+                </p>
+                <div class="invoice-party-edit-grid">
+                  <section class="invoice-party-edit-card">
+                    <h3>Odběratel</h3>
+                    <div class="form-grid">
+                      <div class="form-field">
+                        <label for="buyer_name">Název</label>
+                        <input id="buyer_name" name="buyer_name" value="{{ prefill.buyer_party.name or '' }}" />
+                      </div>
+                      <div class="form-field">
+                        <label for="buyer_email">E-mail</label>
+                        <input id="buyer_email" name="buyer_email" type="email" value="{{ prefill.buyer_party.email or '' }}" />
+                      </div>
+                      <div class="form-field">
+                        <label for="buyer_phone">Telefon</label>
+                        <input id="buyer_phone" name="buyer_phone" value="{{ prefill.buyer_party.phone or '' }}" />
+                      </div>
+                      <div class="form-field">
+                        <label for="buyer_street">Ulice</label>
+                        <input id="buyer_street" name="buyer_street" value="{{ prefill.buyer_party.street or '' }}" />
+                      </div>
+                      <div class="form-field">
+                        <label for="buyer_city">Město</label>
+                        <input id="buyer_city" name="buyer_city" value="{{ prefill.buyer_party.city or '' }}" />
+                      </div>
+                      <div class="form-field">
+                        <label for="buyer_zip">PSČ</label>
+                        <input id="buyer_zip" name="buyer_zip" value="{{ prefill.buyer_party.zip or '' }}" />
+                      </div>
+                      <div class="form-field">
+                        <label for="buyer_country">Země</label>
+                        <input id="buyer_country" name="buyer_country" maxlength="2" value="{{ prefill.buyer_party.country or 'CZ' }}" />
+                      </div>
+                      <div class="form-field">
+                        <label for="buyer_ico">IČO</label>
+                        <input id="buyer_ico" name="buyer_ico" value="{{ prefill.buyer_party.ico or '' }}" />
+                      </div>
+                      <div class="form-field">
+                        <label for="buyer_dic">DIČ</label>
+                        <input id="buyer_dic" name="buyer_dic" value="{{ prefill.buyer_party.dic or '' }}" />
+                      </div>
+                    </div>
+                  </section>
+                </div>
+                <div class="form-actions invoice-party-dialog-actions">
+                  <button class="btn" type="button" data-invoice-party-dialog-close>Hotovo</button>
+                </div>
+              </div>
+              </div>
+            </dialog>
+
+            <details class="invoice-editor-more-options">
+              <summary>Další možnosti</summary>
+              <div class="invoice-editor-more-options-body">
+                <div class="form-row">
+                  <label for="variable_symbol">Variabilní symbol</label>
+                  <input
+                    id="variable_symbol"
+                    name="variable_symbol"
+                    type="text"
+                    inputmode="numeric"
+                    maxlength="10"
+                    value="{{ prefill.variable_symbol or '' }}"
+                    placeholder="Např. 4470"
+                    data-variable-symbol-input
+                  />
+                  <div class="invoice-editor-hint">
+                    Když je u kontaktu pevný VS, předvyplní se automaticky. Můžeš ho ale pro konkrétní fakturu ručně změnit.
+                  </div>
+                </div>
+
+                <div class="form-row">
+                  <label for="discount_amount">Sleva</label>
+                  <input
+                    id="discount_amount"
+                    name="discount_amount"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value="{{ prefill.discount_amount }}"
+                    placeholder="0.00"
+                    inputmode="decimal"
+                    data-discount-input
+                  />
+                  <div class="invoice-editor-hint">
+                    Volitelné. Sleva se odečte od mezisoučtu před zaokrouhlením.
+                  </div>
+                </div>
+
+                <div class="form-row">
+                  <label for="rounding_enabled">Zaokrouhlení</label>
+                  <label class="checkbox-inline">
+                    <input id="rounding_enabled" name="rounding_enabled" type="checkbox" value="1" {% if prefill.rounding_enabled %}checked{% endif %} data-rounding-enabled />
+                    Zaokrouhlit celkovou částku automaticky přidáním položky „Zaokrouhlení“
+                  </label>
+                  <input type="hidden" id="rounding_adjustment" name="rounding_adjustment" value="{{ prefill.rounding_adjustment }}" data-rounding-adjustment />
+                  <div class="invoice-editor-hint">
+                    Po zapnutí se dopočítá rozdíl do celé měnové jednotky a na faktuře se zobrazí jako samostatná položka.
+                  </div>
+                </div>
+
+                <div class="form-row">
+                  <label for="notes">Poznámka</label>
+                  <textarea id="notes" name="notes" rows="5">{{ prefill.notes }}</textarea>
+                </div>
+
+                <div class="form-row">
+                  <label for="footer_mode">Patička faktury</label>
+                  <select
+                    id="footer_mode"
+                    name="footer_mode"
+                    data-footer-preset
+                    data-footer-presets='{{ (footer_preset_map or {}) | tojson }}'
+                  >
+                    {% for value, label in (footer_preset_options or []) %}
+                      <option value="{{ value }}" {% if (prefill.footer_mode or '') == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                  </select>
+                  <div class="invoice-editor-hint" id="invoice-footer-hint">
+                    Patička se zobrazí v dolní části veřejného náhledu i PDF.
+                  </div>
+                </div>
+
+                <div class="form-row">
+                  <label for="footer_text">Text patičky</label>
+                  <textarea id="footer_text" name="footer_text" rows="3" data-footer-text>{{ prefill.footer_text or '' }}</textarea>
+                </div>
+              </div>
+            </details>
+          </section>
+
+          <aside class="invoice-editor-sidebar">
+            <div class="invoice-editor-summary-card">
+              <div class="invoice-editor-summary-kicker">
+                {% if invoice and series_locked %}
+                  Vystavený doklad
+                {% elif invoice %}
+                  Koncept
+                {% else %}
+                  {{ page_title or 'Nový doklad' }}
+                {% endif %}
+              </div>
+              <div class="invoice-editor-summary-total" id="invoice-grand-total">{{ prefill.total_preview }}</div>
+
+              <div class="invoice-editor-summary-meta">
+                {% if invoice %}
+                  <div>
+                    <span>Číslo konceptu</span>
+                    <strong>{{ invoice.number }}</strong>
+                  </div>
+                {% endif %}
+                <div>
+                  <span>Finální číslo</span>
+                  <strong id="invoice-summary-number">{{ prefill.final_number_preview }}</strong>
+                </div>
+                <div>
+                  <span>Režim DPH</span>
+                  <strong>{% if is_vat_payer %}Plátce DPH{% else %}Neplátce DPH{% endif %}</strong>
+                </div>
+              </div>
+
+              <div class="invoice-editor-summary-breakdown">
+                <div>
+                  <span>Mezisoučet</span>
+                  <strong id="invoice-items-total">{{ prefill.items_total_preview }}</strong>
+                </div>
+                <div>
+                  <span>Sleva</span>
+                  <strong id="invoice-discount-total">{{ prefill.discount_preview }}</strong>
+                </div>
+                <div>
+                  <span>Zaokrouhlení</span>
+                  <strong id="invoice-rounding-total">{{ prefill.rounding_preview }}</strong>
+                </div>
+              </div>
+
+              {% if is_vat_payer %}
+                <p class="invoice-editor-summary-note">Ceny položek počítáme podle sazby DPH na řádku.</p>
+              {% endif %}
+            </div>
+
+            <div class="invoice-editor-catalog-card" id="invoice-editor-catalog">
+              <div class="invoice-editor-summary-kicker">Katalog</div>
+              <div class="invoice-editor-catalog-head">
+                <h3>Katalog oblíbených položek</h3>
+                <strong data-catalog-currency-label>{{ prefill.currency }}</strong>
+              </div>
+              <p class="invoice-editor-hint">
+                Řádek uložíš hvězdičkou ☆ přímo v tabulce a pak ho vložíš jedním klikem i bez historie minulých faktur.
+              </p>
+              <div class="invoice-editor-catalog-toolbar">
+                <input
+                  type="search"
+                  placeholder="Hledat v katalogu"
+                  autocomplete="off"
+                  data-catalog-search
+                />
+              </div>
+              <div class="invoice-catalog-status" data-catalog-status aria-live="polite"></div>
+              <div class="invoice-catalog-list" id="invoice-catalog-list">
+                {% if catalog_items %}
+                  {% for item in catalog_items %}
+                    {{ catalog_item_card(item, is_vat_payer=is_vat_payer) }}
+                  {% endfor %}
+                {% else %}
+                  <div class="invoice-catalog-empty" data-catalog-empty>
+                    Katalog je pro měnu {{ prefill.currency }} zatím prázdný. Ulož si první řádek hvězdičkou ☆.
+                  </div>
+                {% endif %}
+              </div>
+            </div>
+          </aside>
+        </div>
+
+        <section class="invoice-items-section">
+          <div class="invoice-items-toolbar">
+            <div>
+              <h2>Položky faktury</h2>
+              <p class="invoice-editor-hint">Začni jednou položkou. Další řádek přidáš tlačítkem, položku uložíš do katalogu hvězdičkou ☆, pořadí změníš přetažením a našeptávání ovládáš i klávesnicí (↑ ↓ Enter). Návrh se doplní jen po kliknutí nebo po Enteru na vybrané volbě.</p>
+            </div>
+            <button type="button" class="btn" id="invoice-add-item-top">+ Přidat položku</button>
+          </div>
+
+          <div class="invoice-items-scroll">
+            <table class="invoice-items-table" id="invoice-items-table">
+              <thead>
+                <tr>
+                  <th class="invoice-items-th invoice-items-th-drag"></th>
+                  <th class="invoice-items-th invoice-items-th-qty">Počet</th>
+                  <th class="invoice-items-th invoice-items-th-unit">MJ</th>
+                  <th class="invoice-items-th invoice-items-th-desc">Popis</th>
+                  <th class="invoice-items-th invoice-items-th-price">Cena za MJ</th>
+                  {% if is_vat_payer %}
+                    <th class="invoice-items-th invoice-items-th-vat">DPH</th>
+                  {% endif %}
+                  <th class="invoice-items-th invoice-items-th-total">Celkem</th>
+                  <th class="invoice-items-th invoice-items-th-remove"></th>
+                </tr>
+              </thead>
+              <tbody id="invoice-items-body">
+                {% for item in prefill_items %}
+                  {{ item_row(item, is_vat_payer=is_vat_payer, zero_money_preview=prefill.zero_money_preview) }}
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+
+          <template id="invoice-item-row-template">
+            {{ item_row({'description': '', 'quantity': '1', 'unit_price': '', 'vat_rate': (default_vat_rate or '21') if is_vat_payer else '0', 'total_preview': prefill.zero_money_preview}, is_vat_payer=is_vat_payer, zero_money_preview=prefill.zero_money_preview) }}
+          </template>
+        </section>
+
+        {% if recurring_mode %}
+          <div class="invoice-editor-recurring-total">
+            <div class="invoice-editor-actions-total">
+              <span>Celkem</span>
+              <strong id="invoice-actions-total">{{ prefill.total_preview }}</strong>
+            </div>
+          </div>
+
+          <section class="invoice-editor-recurring-card card stack-sm">
+              <div>
+                <p class="page-kicker" style="margin-bottom:0.35rem;">Opakování</p>
+                <h3 style="margin:0 0 0.35rem;">Nastavení automatické faktury</h3>
+                <p class="muted" style="margin:0;">Po uložení vznikne interní šablona a plán opakování. Šablona se nebude plést do běžného seznamu faktur.</p>
+              </div>
+              <div class="form-grid">
+                <div class="form-field">
+                  <label for="recurring_name">Název opakování</label>
+                  <input id="recurring_name" name="name" value="{{ recurring_prefill.name or '' }}" placeholder="Např. Měsíční správa hostingu" />
+                </div>
+                <div class="form-field">
+                  <label for="recurring_next_issue_date">První vystavení</label>
+                  <input id="recurring_next_issue_date" type="date" name="next_issue_date" value="{{ recurring_prefill.next_issue_date }}" />
+                </div>
+                <div class="form-field">
+                  <label for="recurring_interval_unit">Opakovat</label>
+                  <select id="recurring_interval_unit" name="interval_unit">
+                    {% for value, label in recurring_interval_options %}
+                      <option value="{{ value }}" {% if recurring_prefill.interval_unit == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                <div class="form-field">
+                  <label for="recurring_interval_count">Každý kolikátý interval</label>
+                  <input id="recurring_interval_count" name="interval_count" type="number" min="1" value="{{ recurring_prefill.interval_count or 1 }}" />
+                </div>
+                <div class="form-field">
+                  <label for="recurring_due_in_days">Splatnost za dní</label>
+                  <input id="recurring_due_in_days" name="due_in_days" type="number" min="0" value="{{ recurring_prefill.due_in_days or 14 }}" />
+                </div>
+                <div class="form-field">
+                  <label for="recurring_email_override">E-mail pro auto-posílání</label>
+                  <input id="recurring_email_override" name="email_override" value="{{ recurring_prefill.email_override or '' }}" placeholder="nechat prázdné = e-mail kontaktu" />
+                </div>
+              </div>
+              <div class="toolbar">
+                <label class="checkbox" style="display:flex; align-items:center; gap:0.5rem;">
+                  <input type="checkbox" name="auto_issue" value="1" {% if recurring_prefill.auto_issue %}checked{% endif %} />
+                  <span>V den běhu vystavit jako ostrý doklad</span>
+                </label>
+                <label class="checkbox" style="display:flex; align-items:center; gap:0.5rem;">
+                  <input type="checkbox" name="auto_send" value="1" {% if recurring_prefill.auto_send %}checked{% endif %} />
+                  <span>Po vystavení rovnou poslat e-mailem</span>
+                </label>
+              </div>
+              <p class="muted">Když vystavení vypneš, automatika v daný den založí jen koncept. Neznamená to vystavit hned při uložení plánu.</p>
+              <div class="muted" style="font-size:0.95rem;">
+                V položkách a poznámkách můžeš používat proměnné jako <code>{% raw %}{{month_name}}{% endraw %}</code>, <code>{% raw %}{{month}}{% endraw %}</code>, <code>{% raw %}{{year}}{% endraw %}</code> nebo <code>{% raw %}{{period_label}}{% endraw %}</code>.
+                Posuny období fungují třeba jako <code>{% raw %}{{month_name+1}}{% endraw %}</code>, <code>{% raw %}{{period_label-1}}{% endraw %}</code>, <code>{% raw %}{{month++}}{% endraw %}</code>, <code>{% raw %}{{month_start+1}}{% endraw %}</code> a <code>{% raw %}{{month_end+1}}{% endraw %}</code>.
+              </div>
+            </section>
+        {% endif %}
+
+        <div class="invoice-editor-actions">
+          {% if not recurring_mode %}
+            <div class="invoice-editor-actions-total">
+              <span>Celkem</span>
+              <strong id="invoice-actions-total">{{ prefill.total_preview }}</strong>
+            </div>
+          {% endif %}
+
+          <div class="invoice-editor-actions-right">
+            <div class="form-actions">
+              <a class="btn" href="{{ back_url }}">Zpět</a>
+              <button type="button" class="btn" id="invoice-add-item-bottom">+ Přidat položku</button>
+              {% if show_draft_submit %}
+                <button class="btn invoice-editor-submit" type="submit" name="submit_action" value="draft">{{ draft_submit_label or 'Uložit koncept' }}</button>
+              {% endif %}
+              <button class="btn primary invoice-editor-submit" type="submit" name="submit_action" value="issue">{{ submit_label }}</button>
+            </div>
+            {% if show_draft_submit and not recurring_mode and not series_locked %}
+              <div class="invoice-editor-autosave" data-autosave-status aria-live="polite">
+                Koncept se uloží automaticky po vyplnění položek.
+              </div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </form>
+
+    <script>
+      (() => {
+        const form = document.getElementById('invoice-editor-form');
+        if (!form) return;
+
+        const isVatPayer = form.dataset.isVatPayer === '1';
+        const documentType = String(form.querySelector('input[name="document_type"]')?.value || '').trim() || 'invoice';
+        const suggestionsUrl = form.dataset.suggestionsUrl || '/invoices/item-suggestions';
+        const currentInvoiceId = (form.dataset.currentInvoiceId || '').trim();
+        const autosaveEnabled = form.dataset.autosaveEnabled === '1';
+        const autosaveUrl = form.dataset.autosaveUrl || '/invoices/autosave';
+        const autosaveIdInput = form.querySelector('[data-autosave-invoice-id]');
+        const autosaveStatusNode = form.querySelector('[data-autosave-status]');
+        const itemsBody = form.querySelector('#invoice-items-body');
+        const rowTemplate = form.querySelector('#invoice-item-row-template');
+        const currencyInput = form.querySelector('[data-currency-input]');
+        const roundingToggle = form.querySelector('[data-rounding-enabled]');
+        const roundingInput = form.querySelector('[data-rounding-adjustment]');
+        const discountInput = form.querySelector('[data-discount-input]');
+        const seriesLocked = form.dataset.seriesLocked === '1';
+        const defaultVatRate = form.dataset.defaultVatRate || '21';
+        const addButtons = [
+          form.querySelector('#invoice-add-item-top'),
+          form.querySelector('#invoice-add-item-bottom'),
+        ].filter(Boolean);
+        const issueDateInput = form.querySelector('[data-issue-date]');
+        const dueDateInput = form.querySelector('[data-due-date]');
+        const taxableSupplyDateInput = form.querySelector('[data-taxable-supply-date]');
+        const dueTermInput = form.querySelector('[data-due-term]');
+        const dueHint = form.querySelector('#due-date-hint');
+        const contactSelect = form.querySelector('[data-contact-select]');
+        const contactSearchInput = form.querySelector('[data-contact-search]');
+        const contactPreview = form.querySelector('#invoice-contact-preview');
+        const partyDialog = form.querySelector('#invoice-party-dialog');
+        const partyDialogOpenButton = form.querySelector('[data-invoice-party-dialog-open]');
+        const partyDialogCloseButtons = Array.from(form.querySelectorAll('[data-invoice-party-dialog-close]'));
+        const variableSymbolInput = form.querySelector('[data-variable-symbol-input]');
+        const seriesSelect = form.querySelector('[data-series-select]');
+        const footerPresetSelect = form.querySelector('[data-footer-preset]');
+        const footerTextInput = form.querySelector('[data-footer-text]');
+        const footerHint = form.querySelector('#invoice-footer-hint');
+        const issuedNumberNodes = [
+          form.querySelector('#invoice-issued-number-preview'),
+          form.querySelector('#invoice-summary-number'),
+        ].filter(Boolean);
+        const itemsTotalNode = form.querySelector('#invoice-items-total');
+        const discountTotalNode = form.querySelector('#invoice-discount-total');
+        const roundingTotalNode = form.querySelector('#invoice-rounding-total');
+        const grandTotalNodes = [
+          form.querySelector('#invoice-grand-total'),
+          form.querySelector('#invoice-actions-total'),
+        ].filter(Boolean);
+        const csrfTokenInput = form.querySelector('input[name="csrf_token"]');
+        const csrfToken = csrfTokenInput instanceof HTMLInputElement ? csrfTokenInput.value : '';
+        const catalogUrl = form.dataset.catalogUrl || '/invoices/catalog-items';
+        const catalogDeleteTemplate = form.dataset.catalogDeleteTemplate || '/invoices/catalog-items/__ID__/delete';
+        const catalogListNode = form.querySelector('#invoice-catalog-list');
+        const catalogSearchInput = form.querySelector('[data-catalog-search]');
+        const catalogStatusNode = form.querySelector('[data-catalog-status]');
+        const catalogCurrencyNodes = [form.querySelector('[data-catalog-currency-label]')].filter(Boolean);
+        let footerPresetTexts = {};
+
+        if (footerPresetSelect) {
+          try {
+            footerPresetTexts = JSON.parse(footerPresetSelect.dataset.footerPresets || '{}') || {};
+          } catch (_err) {
+            footerPresetTexts = {};
+          }
+        }
+
+        const suggestionCache = new Map();
+        const rowSuggestions = new WeakMap();
+        const rowActiveSuggestionIndex = new WeakMap();
+        const rowLookupTimers = new WeakMap();
+        let draggedRow = null;
+        let activeRow = null;
+        let catalogLookupTimer = null;
+        let autosaveTimer = null;
+        let autosaveAbortController = null;
+        let autosaveLastSignature = '';
+        let autosavePendingBecauseBusy = false;
+        let autosaveInFlight = false;
+        let bypassAutosaveSubmit = false;
+        let lastSubmitter = null;
+
+        if (partyDialog && partyDialogOpenButton) {
+          partyDialogOpenButton.addEventListener('click', () => {
+            if (typeof partyDialog.showModal === 'function') {
+              partyDialog.showModal();
+            } else {
+              partyDialog.setAttribute('open', 'open');
+            }
+          });
+          partyDialogCloseButtons.forEach((button) => {
+            button.addEventListener('click', () => {
+              partyDialog.close();
+            });
+          });
+          partyDialog.addEventListener('click', (event) => {
+            if (event.target !== partyDialog) return;
+            const rect = partyDialog.getBoundingClientRect();
+            const inside = (
+              event.clientX >= rect.left &&
+              event.clientX <= rect.right &&
+              event.clientY >= rect.top &&
+              event.clientY <= rect.bottom
+            );
+            if (!inside) partyDialog.close();
+          });
+        }
+
+        const escapeHtml = (value) => String(value || '')
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;');
+
+        const setAutosaveStatus = (message = '', state = '') => {
+          if (!autosaveStatusNode) return;
+          autosaveStatusNode.textContent = message;
+          autosaveStatusNode.dataset.state = state || '';
+          autosaveStatusNode.hidden = !message;
+        };
+
+        const normalizeNumberString = (raw) => String(raw || '').trim().replace(/\s+/g, '').replace(',', '.');
+
+        const parseDecimal = (raw, fallback = 0) => {
+          const normalized = normalizeNumberString(raw);
+          if (!normalized) return fallback;
+          const value = Number(normalized);
+          return Number.isFinite(value) ? value : fallback;
+        };
+
+        const formatVatRate = (value) => {
+          const numeric = parseDecimal(value, 0);
+          return `${numeric.toFixed(2).replace('.', ',')} %`;
+        };
+
+        const formatMoney = (amount) => {
+          const currency = (currencyInput?.value || 'CZK').trim().toUpperCase() || 'CZK';
+          try {
+            return new Intl.NumberFormat('cs-CZ', {
+              style: 'currency',
+              currency,
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            }).format(amount);
+          } catch (_err) {
+            return `${amount.toFixed(2).replace('.', ',')} ${currency}`;
+          }
+        };
+
+        const normalizeVatRateValue = (value) => {
+          const raw = String(value || '').trim();
+          if (!raw) return '';
+          const numeric = parseDecimal(raw, NaN);
+          if (!Number.isFinite(numeric)) return raw;
+          return String(numeric).replace('.', ',');
+        };
+
+        const syncVatControl = (row) => {
+          if (!row || !isVatPayer) return;
+          const select = row.querySelector('[data-item-vat-select]');
+          const customInput = row.querySelector('[data-item-vat-custom]');
+          const hiddenInput = row.querySelector('[data-item-vat-rate]');
+          if (!hiddenInput) return;
+          const currentValue = String(hiddenInput.value || defaultVatRate || '0').trim();
+          if (select) {
+            const values = [...select.options].map((option) => option.value);
+            select.value = values.includes(currentValue) ? currentValue : 'custom';
+          }
+          const isCustom = select?.value === 'custom';
+          if (customInput) {
+            customInput.hidden = !isCustom;
+            customInput.value = isCustom ? currentValue : '';
+            customInput.placeholder = normalizeVatRateValue(currentValue || defaultVatRate || '0');
+          }
+        };
+
+        const setRowVatValue = (row, value) => {
+          if (!row || !isVatPayer) return;
+          const hiddenInput = row.querySelector('[data-item-vat-rate]');
+          if (hiddenInput) hiddenInput.value = String(value || defaultVatRate || '0').trim();
+          syncVatControl(row);
+        };
+
+        const rowIsBlank = (row) => {
+          const desc = row.querySelector('[data-item-description]')?.value.trim() || '';
+          const qty = row.querySelector('[data-item-quantity]')?.value.trim() || '';
+          const price = row.querySelector('[data-item-unit-price]')?.value.trim() || '';
+          const vat = row.querySelector('[data-item-vat-rate]')?.value.trim() || '';
+          if (desc) return false;
+          if (price) return false;
+          if (qty && !['1', '1.0', '1.00'].includes(qty)) return false;
+          if (isVatPayer) {
+            if (vat && ![defaultVatRate, `${defaultVatRate}.0`, `${defaultVatRate}.00`].includes(vat)) return false;
+          }
+          return true;
+        };
+
+        const computeRowTotal = (row) => {
+          if (!row) return 0;
+          if (rowIsBlank(row)) {
+            const totalNode = row.querySelector('[data-item-total]');
+            if (totalNode) totalNode.textContent = formatMoney(0);
+            return 0;
+          }
+          const quantity = Math.max(parseDecimal(row.querySelector('[data-item-quantity]')?.value, 1), 0);
+          const rawUnitPrice = parseDecimal(row.querySelector('[data-item-unit-price]')?.value, 0);
+          const unitPrice = documentType === 'credit_note' ? rawUnitPrice : Math.max(rawUnitPrice, 0);
+          const vatRate = isVatPayer ? Math.max(parseDecimal(row.querySelector('[data-item-vat-rate]')?.value, 0), 0) : 0;
+          const total = quantity * unitPrice * (1 + (vatRate / 100));
+          const totalNode = row.querySelector('[data-item-total]');
+          if (totalNode) totalNode.textContent = formatMoney(total);
+          return total;
+        };
+
+        const computeAutoRounding = (itemsTotal) => {
+          const cents = Math.round((Number(itemsTotal) || 0) * 100);
+          const roundedCents = Math.round(cents / 100) * 100;
+          return (roundedCents - cents) / 100;
+        };
+
+        const syncTotals = () => {
+          const rows = [...itemsBody.querySelectorAll('[data-item-row]')];
+          const itemsTotal = rows.reduce((sum, row) => sum + computeRowTotal(row), 0);
+          const rawDiscount = Math.max(parseDecimal(discountInput?.value, 0), 0);
+          const discountLimit = Math.max(itemsTotal, 0);
+          const discount = Math.min(rawDiscount, discountLimit);
+          const subtotalAfterDiscount = itemsTotal - discount;
+          const rounding = roundingToggle?.checked ? computeAutoRounding(subtotalAfterDiscount) : 0;
+          if (roundingInput) roundingInput.value = rounding.toFixed(2);
+          if (discountInput instanceof HTMLInputElement) {
+            discountInput.setCustomValidity(rawDiscount > discountLimit ? 'Sleva nesmí být vyšší než mezisoučet.' : '');
+          }
+          if (itemsTotalNode) itemsTotalNode.textContent = formatMoney(itemsTotal);
+          if (discountTotalNode) discountTotalNode.textContent = formatMoney(-discount);
+          if (roundingTotalNode) roundingTotalNode.textContent = formatMoney(rounding);
+          grandTotalNodes.forEach((node) => {
+            node.textContent = formatMoney(subtotalAfterDiscount + rounding);
+          });
+        };
+
+        const formHasAutosaveContent = () => {
+          if (!autosaveEnabled) return false;
+          if (!String(contactSelect?.value || '').trim()) return false;
+          const textFields = [
+            form.querySelector('[name="notes"]')?.value,
+            form.querySelector('[name="variable_symbol"]')?.value,
+            form.querySelector('[name="buyer_name"]')?.value,
+            form.querySelector('[name="buyer_street"]')?.value,
+            form.querySelector('[name="buyer_city"]')?.value,
+            form.querySelector('[name="buyer_ico"]')?.value,
+          ];
+          if (textFields.some((value) => String(value || '').trim())) return true;
+          return [...itemsBody.querySelectorAll('[data-item-row]')].some((row) => !rowIsBlank(row));
+        };
+
+        const autosaveSignature = () => {
+          const data = new FormData(form);
+          data.delete('csrf_token');
+          data.delete('submit_action');
+          return [...data.entries()].map(([key, value]) => `${key}=${String(value)}`).join('&');
+        };
+
+        const runAutosave = async ({ force = false } = {}) => {
+          if (!autosaveEnabled || bypassAutosaveSubmit) return null;
+          if (!formHasAutosaveContent()) {
+            setAutosaveStatus('Koncept se uloží automaticky po vyplnění položek.', '');
+            return null;
+          }
+          const signature = autosaveSignature();
+          if (!force && signature === autosaveLastSignature) return null;
+          if (autosaveInFlight) {
+            autosavePendingBecauseBusy = true;
+            if (force) {
+              await new Promise((resolve) => window.setTimeout(resolve, 180));
+              return runAutosave({ force: true });
+            }
+            return null;
+          }
+          autosaveInFlight = true;
+          autosavePendingBecauseBusy = false;
+          if (autosaveAbortController) autosaveAbortController.abort();
+          autosaveAbortController = new AbortController();
+          setAutosaveStatus('Ukládám koncept...', 'saving');
+          const data = new FormData(form);
+          data.set('autosave', '1');
+          try {
+            const response = await fetch(autosaveUrl, {
+              method: 'POST',
+              headers: {
+                Accept: 'application/json',
+                'X-CSRF-Token': csrfToken,
+              },
+              credentials: 'same-origin',
+              body: data,
+              signal: autosaveAbortController.signal,
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok || payload?.ok === false) {
+              if (payload?.skipped) {
+                setAutosaveStatus(payload?.detail || 'Koncept zatím není co ukládat.', '');
+                return payload;
+              }
+              throw new Error(payload?.detail || 'Koncept se nepodařilo automaticky uložit.');
+            }
+            if (payload?.invoice_id && autosaveIdInput instanceof HTMLInputElement) {
+              autosaveIdInput.value = String(payload.invoice_id);
+            }
+            autosaveLastSignature = autosaveSignature();
+            const savedAt = payload?.saved_at_label || 'teď';
+            const number = payload?.number ? ` (${payload.number})` : '';
+            setAutosaveStatus(`Koncept uložený ${savedAt}${number}.`, 'saved');
+            return payload;
+          } catch (err) {
+            if (err?.name === 'AbortError') return null;
+            setAutosaveStatus(err?.message || 'Koncept se nepodařilo automaticky uložit.', 'error');
+            if (force) throw err;
+            return null;
+          } finally {
+            autosaveInFlight = false;
+            if (autosavePendingBecauseBusy) {
+              autosavePendingBecauseBusy = false;
+              scheduleAutosave();
+            }
+          }
+        };
+
+        const scheduleAutosave = () => {
+          if (!autosaveEnabled || bypassAutosaveSubmit) return;
+          if (autosaveTimer) window.clearTimeout(autosaveTimer);
+          if (!formHasAutosaveContent()) {
+            setAutosaveStatus('Koncept se uloží automaticky po vyplnění položek.', '');
+            return;
+          }
+          setAutosaveStatus('Čekám na pauzu v psaní...', 'pending');
+          autosaveTimer = window.setTimeout(() => {
+            runAutosave();
+          }, 1400);
+        };
+
+        const submitSavedDraft = (action) => {
+          const invoiceId = String(autosaveIdInput?.value || '').trim();
+          if (!invoiceId) return false;
+          if (action === 'draft') {
+            window.location.assign(`/invoices/${encodeURIComponent(invoiceId)}?notice=${encodeURIComponent('Koncept je uložený. Finální číslo dostane až při vystavení.')}`);
+            return true;
+          }
+          if (action === 'issue') {
+            const issueForm = document.createElement('form');
+            issueForm.method = 'post';
+            issueForm.action = `/invoices/${encodeURIComponent(invoiceId)}/issue`;
+            const csrf = document.createElement('input');
+            csrf.type = 'hidden';
+            csrf.name = 'csrf_token';
+            csrf.value = csrfToken;
+            issueForm.appendChild(csrf);
+            document.body.appendChild(issueForm);
+            bypassAutosaveSubmit = true;
+            issueForm.submit();
+            return true;
+          }
+          return false;
+        };
+
+        const catalogRequestKey = (query = '') => {
+          const currency = (currencyInput?.value || 'CZK').trim().toUpperCase() || 'CZK';
+          return [currency, String(query || '').trim().toLocaleLowerCase('cs-CZ')].join('|');
+        };
+
+        const setCatalogStatus = (message = '', kind = '') => {
+          if (!catalogStatusNode) return;
+          catalogStatusNode.textContent = message;
+          catalogStatusNode.dataset.state = kind || '';
+          catalogStatusNode.hidden = !message;
+        };
+
+        const currentCatalogCurrency = () => (currencyInput?.value || 'CZK').trim().toUpperCase() || 'CZK';
+
+        const syncCatalogCurrencyLabels = () => {
+          const currency = currentCatalogCurrency();
+          catalogCurrencyNodes.forEach((node) => {
+            node.textContent = currency;
+          });
+        };
+
+        const syncFooterPreset = () => {
+          if (!footerPresetSelect || !footerTextInput) return;
+          const mode = String(footerPresetSelect.value || '').trim() || 'none';
+          const isCustom = mode === 'custom';
+          const isNone = mode === 'none';
+          if (!isCustom) {
+            footerTextInput.value = String(footerPresetTexts?.[mode] || '');
+          }
+          footerTextInput.readOnly = !isCustom;
+          footerTextInput.placeholder = isCustom ? 'Např. zápis v rejstříku nebo jiná povinná informace.' : '';
+          footerTextInput.closest('.form-row')?.toggleAttribute('hidden', isNone);
+          if (footerHint) {
+            footerHint.textContent = isCustom
+              ? 'Můžeš napsat vlastní právní nebo informační patičku.'
+              : 'Patička se zobrazí v dolní části veřejného náhledu i PDF.';
+          }
+        };
+
+        const extractCatalogItemFromNode = (node) => ({
+          id: Number(node?.getAttribute('data-catalog-item-id') || '0') || 0,
+          description: node?.getAttribute('data-description') || '',
+          quantity: node?.getAttribute('data-quantity') || '1',
+          unit: node?.getAttribute('data-unit') || '',
+          unit_price: node?.getAttribute('data-unit-price') || '',
+          vat_rate: node?.getAttribute('data-vat-rate') || (isVatPayer ? defaultVatRate : '0'),
+          currency: node?.getAttribute('data-currency') || currentCatalogCurrency(),
+        });
+
+        const renderCatalogItems = (items = []) => {
+          if (!catalogListNode) return;
+          const normalizedItems = Array.isArray(items) ? items : [];
+          if (!normalizedItems.length) {
+            catalogListNode.innerHTML = `
+              <div class="invoice-catalog-empty" data-catalog-empty>
+                Katalog je pro měnu ${escapeHtml(currentCatalogCurrency())} zatím prázdný. Ulož si první řádek hvězdičkou ☆.
+              </div>
+            `;
+            return;
+          }
+          catalogListNode.innerHTML = normalizedItems.map((item) => {
+            const meta = [
+              `${escapeHtml(item.quantity || '1')}${item.unit ? ` ${escapeHtml(item.unit)}` : ''} × ${escapeHtml(item.unit_price_preview || item.unit_price || '')}`,
+              isVatPayer ? `DPH ${escapeHtml(formatVatRate(item.vat_rate || '0'))}` : '',
+              escapeHtml(item.currency || currentCatalogCurrency()),
+            ].filter(Boolean);
+            return `
+              <article
+                class="invoice-catalog-item"
+                data-catalog-item-id="${escapeHtml(item.id || '')}"
+                data-description="${escapeHtml(item.description || '')}"
+                data-quantity="${escapeHtml(item.quantity || '1')}"
+                data-unit="${escapeHtml(item.unit || '')}"
+                data-unit-price="${escapeHtml(item.unit_price || '')}"
+                data-vat-rate="${escapeHtml(item.vat_rate || (isVatPayer ? defaultVatRate : '0'))}"
+                data-currency="${escapeHtml(item.currency || currentCatalogCurrency())}"
+              >
+                <div class="invoice-catalog-item-main">
+                  <div class="invoice-catalog-item-title">${escapeHtml(item.description || '')}</div>
+                  <div class="invoice-catalog-item-meta">${meta.map((value) => `<span>${value}</span>`).join('')}</div>
+                </div>
+                <div class="invoice-catalog-item-actions">
+                  <button type="button" class="invoice-catalog-insert" data-apply-catalog-item>Vložit</button>
+                  <button
+                    type="button"
+                    class="invoice-catalog-remove"
+                    data-delete-catalog-item="${escapeHtml(item.id || '')}"
+                    aria-label="Smazat z katalogu"
+                    title="Smazat z katalogu"
+                  >×</button>
+                </div>
+              </article>
+            `;
+          }).join('');
+        };
+
+        const fetchCatalogItems = async (query = '') => {
+          const normalizedQuery = String(query || '').trim();
+          const url = new URL(catalogUrl, window.location.origin);
+          if (normalizedQuery) url.searchParams.set('q', normalizedQuery);
+          const currency = currentCatalogCurrency();
+          if (currency) url.searchParams.set('currency', currency);
+          url.searchParams.set('limit', '12');
+          const response = await fetch(url.toString(), {
+            headers: {
+              Accept: 'application/json',
+            },
+            credentials: 'same-origin',
+          });
+          if (!response.ok) throw new Error('Katalog se nepodařilo načíst.');
+          const payload = await response.json();
+          return Array.isArray(payload?.items) ? payload.items : [];
+        };
+
+        const refreshCatalogItems = async ({ query = catalogSearchInput?.value || '', silent = false } = {}) => {
+          syncCatalogCurrencyLabels();
+          try {
+            const items = await fetchCatalogItems(query);
+            renderCatalogItems(items);
+            if (!silent) setCatalogStatus('');
+          } catch (_err) {
+            renderCatalogItems([]);
+            if (!silent) setCatalogStatus('Katalog se teď nepodařilo načíst.', 'error');
+          }
+        };
+
+        const rowForCatalogInsert = () => {
+          if (activeRow && itemsBody.contains(activeRow)) return activeRow;
+          const blankRow = [...itemsBody.querySelectorAll('[data-item-row]')].find((row) => rowIsBlank(row));
+          if (blankRow) return blankRow;
+          return addRow({ focusDescription: false });
+        };
+
+        const saveRowToCatalog = async (row) => {
+          if (!row) return;
+          const values = extractRowValues(row);
+          const body = new URLSearchParams();
+          body.set('description', String(values.description || '').trim());
+          body.set('quantity', String(values.quantity || '1').trim() || '1');
+          body.set('unit', String(values.unit || '').trim());
+          body.set('unit_price', String(values.unit_price || '').trim());
+          body.set('vat_rate', String(values.vat_rate || (isVatPayer ? defaultVatRate : '0')).trim());
+          body.set('currency', currentCatalogCurrency());
+          if (!body.get('description')) {
+            setCatalogStatus('Nejdřív vyplň popis položky, kterou chceš uložit do katalogu.', 'error');
+            row.querySelector('[data-item-description]')?.focus();
+            return;
+          }
+          try {
+            const response = await fetch(catalogUrl, {
+              method: 'POST',
+              headers: {
+                Accept: 'application/json',
+                'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                'X-CSRF-Token': csrfToken,
+              },
+              credentials: 'same-origin',
+              body: body.toString(),
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) {
+              setCatalogStatus(payload?.detail || 'Položku se nepodařilo uložit do katalogu.', 'error');
+              return;
+            }
+            setCatalogStatus(payload?.created ? 'Položka uložená do katalogu.' : 'Položka už v katalogu byla — jen jsem ji obnovil nahoře.', 'success');
+            await refreshCatalogItems({ query: catalogSearchInput?.value || '', silent: true });
+          } catch (_err) {
+            setCatalogStatus('Položku se nepodařilo uložit do katalogu.', 'error');
+          }
+        };
+
+        const deleteCatalogItem = async (itemId) => {
+          const normalizedId = Number(itemId || 0);
+          if (!normalizedId) return;
+          const url = catalogDeleteTemplate.replace('__ID__', String(normalizedId));
+          try {
+            const response = await fetch(url, {
+              method: 'POST',
+              headers: {
+                Accept: 'application/json',
+                'X-CSRF-Token': csrfToken,
+              },
+              credentials: 'same-origin',
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) {
+              setCatalogStatus(payload?.detail || 'Položku se nepodařilo smazat z katalogu.', 'error');
+              return;
+            }
+            setCatalogStatus('Položka byla z katalogu smazaná.', 'success');
+            await refreshCatalogItems({ query: catalogSearchInput?.value || '', silent: true });
+          } catch (_err) {
+            setCatalogStatus('Položku se nepodařilo smazat z katalogu.', 'error');
+          }
+        };
+
+        const applyCatalogItem = (item) => {
+          const row = rowForCatalogInsert();
+          if (!row) return;
+          activeRow = row;
+          applySuggestionToRow(row, item, { focusDescription: true });
+          setCatalogStatus('Položka vložená z katalogu.', 'success');
+        };
+
+        const hideSuggestions = (row) => {
+          if (!row) return;
+          const box = row.querySelector('[data-item-suggestions]');
+          if (!box) return;
+          box.hidden = true;
+          box.innerHTML = '';
+          row.classList.remove('invoice-item-row-has-suggestions');
+          rowSuggestions.delete(row);
+          rowActiveSuggestionIndex.delete(row);
+        };
+
+        const setActiveSuggestionIndex = (row, index, { scrollIntoView = false } = {}) => {
+          if (!row) return;
+          const suggestions = Array.isArray(rowSuggestions.get(row)) ? rowSuggestions.get(row) : [];
+          const maxIndex = suggestions.length - 1;
+          const nextIndex = maxIndex >= 0 ? Math.max(-1, Math.min(Number(index) || 0, maxIndex)) : -1;
+          rowActiveSuggestionIndex.set(row, nextIndex);
+          row.querySelectorAll('[data-apply-suggestion]').forEach((button, buttonIndex) => {
+            if (!(button instanceof HTMLElement)) return;
+            const isActive = buttonIndex === nextIndex;
+            button.classList.toggle('is-active', isActive);
+            button.setAttribute('aria-selected', isActive ? 'true' : 'false');
+            if (isActive && scrollIntoView) {
+              try {
+                button.scrollIntoView({ block: 'nearest' });
+              } catch (_err) {
+                // noop
+              }
+            }
+          });
+        };
+
+        const moveActiveSuggestion = (row, direction) => {
+          if (!row) return false;
+          const suggestions = Array.isArray(rowSuggestions.get(row)) ? rowSuggestions.get(row) : [];
+          if (!suggestions.length) return false;
+          const currentIndex = Number(rowActiveSuggestionIndex.get(row) ?? -1);
+          let nextIndex = 0;
+          if (direction < 0) {
+            nextIndex = currentIndex <= 0 ? suggestions.length - 1 : currentIndex - 1;
+          } else {
+            nextIndex = currentIndex >= suggestions.length - 1 ? 0 : currentIndex + 1;
+          }
+          setActiveSuggestionIndex(row, nextIndex, { scrollIntoView: true });
+          return true;
+        };
+
+        const activeSuggestionForRow = (row, { requireExplicitSelection = false } = {}) => {
+          if (!row) return null;
+          const suggestions = Array.isArray(rowSuggestions.get(row)) ? rowSuggestions.get(row) : [];
+          if (!suggestions.length) return null;
+          const index = Number(rowActiveSuggestionIndex.get(row) ?? -1);
+          if (requireExplicitSelection && !(index >= 0 && index < suggestions.length)) return null;
+          if (index >= 0 && index < suggestions.length) return suggestions[index];
+          return suggestions[0] || null;
+        };
+
+        const hideAllSuggestions = (exceptRow = null) => {
+          itemsBody.querySelectorAll('[data-item-row]').forEach((row) => {
+            if (row !== exceptRow) hideSuggestions(row);
+          });
+        };
+
+        const applySuggestionToRow = (row, suggestion, { focusDescription = false } = {}) => {
+          if (!row || !suggestion) return;
+          const descriptionInput = row.querySelector('[data-item-description]');
+          const quantityInput = row.querySelector('[data-item-quantity]');
+          const unitInput = row.querySelector('[data-item-unit]');
+          const priceInput = row.querySelector('[data-item-unit-price]');
+          const vatInput = row.querySelector('[data-item-vat-rate]');
+          if (descriptionInput) descriptionInput.value = suggestion.description || '';
+          if (quantityInput) quantityInput.value = suggestion.quantity || '1';
+          if (unitInput) unitInput.value = suggestion.unit || '';
+          if (priceInput) priceInput.value = suggestion.unit_price || '';
+          if (vatInput && isVatPayer) vatInput.value = suggestion.vat_rate || '0';
+          hideSuggestions(row);
+          syncTotals();
+          if (focusDescription && descriptionInput) descriptionInput.focus();
+        };
+
+        const suggestionRequestKey = (query) => {
+          const currency = (currencyInput?.value || 'CZK').trim().toUpperCase() || 'CZK';
+          return [currency, currentInvoiceId, String(query || '').trim().toLocaleLowerCase('cs-CZ')].join('|');
+        };
+
+        const fetchSuggestions = async (query = '') => {
+          const normalizedQuery = String(query || '').trim();
+          const cacheKey = suggestionRequestKey(normalizedQuery);
+          if (suggestionCache.has(cacheKey)) {
+            return suggestionCache.get(cacheKey) || [];
+          }
+
+          const url = new URL(suggestionsUrl, window.location.origin);
+          if (normalizedQuery) url.searchParams.set('q', normalizedQuery);
+          if (currentInvoiceId) url.searchParams.set('exclude_invoice_id', currentInvoiceId);
+          const currency = (currencyInput?.value || '').trim().toUpperCase();
+          if (currency) url.searchParams.set('currency', currency);
+          url.searchParams.set('limit', '8');
+
+          try {
+            const response = await fetch(url.toString(), {
+              headers: {
+                Accept: 'application/json',
+              },
+              credentials: 'same-origin',
+            });
+            if (!response.ok) {
+              suggestionCache.set(cacheKey, []);
+              return [];
+            }
+            const payload = await response.json();
+            const suggestions = Array.isArray(payload?.suggestions) ? payload.suggestions : [];
+            suggestionCache.set(cacheKey, suggestions);
+            return suggestions;
+          } catch (_err) {
+            suggestionCache.set(cacheKey, []);
+            return [];
+          }
+        };
+
+        const renderSuggestions = (row, suggestions) => {
+          const box = row?.querySelector('[data-item-suggestions]');
+          if (!box) return;
+          const visibleSuggestions = (suggestions || []).slice(0, 6);
+          rowSuggestions.set(row, visibleSuggestions);
+          rowActiveSuggestionIndex.set(row, -1);
+
+          if (!visibleSuggestions.length) {
+            hideSuggestions(row);
+            return;
+          }
+
+          box.innerHTML = `
+            <div class="invoice-item-suggestions-head">Našeptání z katalogu a minulých faktur</div>
+            <div class="invoice-item-suggestions-list" role="listbox" aria-label="Doporučené položky">
+              ${visibleSuggestions.map((suggestion, index) => {
+                const meta = [
+                  `${escapeHtml(suggestion.quantity || '1')}${suggestion.unit ? ` ${escapeHtml(suggestion.unit)}` : ''} × ${escapeHtml(suggestion.unit_price_preview || suggestion.unit_price || '')}`,
+                  isVatPayer ? `DPH ${escapeHtml(formatVatRate(suggestion.vat_rate || '0'))}` : '',
+                  suggestion.source === 'catalog' ? 'katalog' : '',
+                  suggestion.invoice_number ? `naposledy ${escapeHtml(suggestion.invoice_number)}` : '',
+                  suggestion.source !== 'catalog' && suggestion.usage_count > 1 ? `${escapeHtml(suggestion.usage_count)}× použito` : '',
+                ].filter(Boolean);
+                return `
+                  <button
+                    type="button"
+                    class="invoice-suggestion-option"
+                    data-apply-suggestion="${index}"
+                    role="option"
+                    aria-selected="false"
+                  >
+                    <span class="invoice-suggestion-title">${escapeHtml(suggestion.description || '')}</span>
+                    <span class="invoice-suggestion-meta">${meta.join(' · ')}</span>
+                  </button>
+                `;
+              }).join('')}
+            </div>
+          `;
+          box.hidden = false;
+          row.classList.add('invoice-item-row-has-suggestions');
+          setActiveSuggestionIndex(row, -1);
+        };
+
+        const lookupSuggestionsForRow = async (row, { immediate = false, allowEmpty = false } = {}) => {
+          if (!row) return;
+          const descriptionInput = row.querySelector('[data-item-description]');
+          if (!(descriptionInput instanceof HTMLInputElement)) return;
+
+          const triggerLookup = async () => {
+            const query = descriptionInput.value.trim();
+            if (!allowEmpty && query.length < 2) {
+              hideSuggestions(row);
+              return;
+            }
+            const suggestions = await fetchSuggestions(query);
+            if (descriptionInput.value.trim() !== query) return;
+            if (document.activeElement !== descriptionInput && !query) return;
+            hideAllSuggestions(row);
+            renderSuggestions(row, suggestions);
+          };
+
+          const previousTimer = rowLookupTimers.get(row);
+          if (previousTimer) window.clearTimeout(previousTimer);
+
+          if (immediate) {
+            await triggerLookup();
+            return;
+          }
+
+          const timerId = window.setTimeout(() => {
+            triggerLookup();
+          }, 140);
+          rowLookupTimers.set(row, timerId);
+        };
+
+        const ensureAtLeastOneRow = () => {
+          const rows = [...itemsBody.querySelectorAll('[data-item-row]')];
+          if (rows.length > 0) return;
+          addRow();
+        };
+
+        const extractRowValues = (row) => ({
+          description: row?.querySelector('[data-item-description]')?.value || '',
+          quantity: row?.querySelector('[data-item-quantity]')?.value || '1',
+          unit: row?.querySelector('[data-item-unit]')?.value || '',
+          unit_price: row?.querySelector('[data-item-unit-price]')?.value || '',
+          vat_rate: row?.querySelector('[data-item-vat-rate]')?.value || (isVatPayer ? defaultVatRate : '0'),
+        });
+
+        const populateRowValues = (row, values = {}) => {
+          if (!row) return;
+          const descriptionInput = row.querySelector('[data-item-description]');
+          const quantityInput = row.querySelector('[data-item-quantity]');
+          const unitInput = row.querySelector('[data-item-unit]');
+          const priceInput = row.querySelector('[data-item-unit-price]');
+          const vatInput = row.querySelector('[data-item-vat-rate]');
+          if (descriptionInput) descriptionInput.value = values.description || '';
+          if (quantityInput) quantityInput.value = values.quantity || '1';
+          if (unitInput) unitInput.value = values.unit || '';
+          if (priceInput) priceInput.value = values.unit_price || '';
+          if (vatInput) vatInput.value = values.vat_rate || (isVatPayer ? defaultVatRate : '0');
+          setRowVatValue(row, values.vat_rate || (isVatPayer ? defaultVatRate : '0'));
+          hideSuggestions(row);
+        };
+
+        const addRow = ({ insertAfterRow = null, sourceRow = null, focusDescription = true } = {}) => {
+          if (!rowTemplate?.content) return null;
+          const fragment = rowTemplate.content.cloneNode(true);
+          const newRow = fragment.querySelector('[data-item-row]');
+          if (insertAfterRow && insertAfterRow.parentNode === itemsBody) {
+            itemsBody.insertBefore(fragment, insertAfterRow.nextSibling);
+          } else {
+            itemsBody.appendChild(fragment);
+          }
+          if (newRow) syncVatControl(newRow);
+          if (newRow && sourceRow) {
+            populateRowValues(newRow, extractRowValues(sourceRow));
+          }
+          hideAllSuggestions();
+          syncTotals();
+          if (focusDescription) newRow?.querySelector('[data-item-description]')?.focus();
+          return newRow;
+        };
+
+        addButtons.forEach((btn) => {
+          btn.addEventListener('click', () => addRow());
+        });
+
+        const getDragAfterElement = (container, clientY) => {
+          const draggableRows = [...container.querySelectorAll('[data-item-row]:not(.is-dragging)')];
+          let closest = { offset: Number.NEGATIVE_INFINITY, element: null };
+          draggableRows.forEach((row) => {
+            const rect = row.getBoundingClientRect();
+            const offset = clientY - rect.top - rect.height / 2;
+            if (offset < 0 && offset > closest.offset) {
+              closest = { offset, element: row };
+            }
+          });
+          return closest.element;
+        };
+
+        itemsBody.addEventListener('dragstart', (event) => {
+          const target = event.target;
+          if (!(target instanceof HTMLElement)) return;
+          const handle = target.closest('[data-drag-handle]');
+          if (!handle) {
+            event.preventDefault();
+            return;
+          }
+          draggedRow = handle.closest('[data-item-row]');
+          if (!draggedRow) return;
+          hideAllSuggestions();
+          draggedRow.classList.add('is-dragging');
+          if (event.dataTransfer) {
+            event.dataTransfer.effectAllowed = 'move';
+            try {
+              event.dataTransfer.setData('text/plain', 'invoice-item-row');
+            } catch (_err) {
+              // noop
+            }
+          }
+        });
+
+        itemsBody.addEventListener('dragover', (event) => {
+          if (!draggedRow) return;
+          event.preventDefault();
+          const afterElement = getDragAfterElement(itemsBody, event.clientY);
+          if (!afterElement) itemsBody.appendChild(draggedRow);
+          else if (afterElement !== draggedRow) itemsBody.insertBefore(draggedRow, afterElement);
+        });
+
+        const finishDrag = () => {
+          if (!draggedRow) return;
+          draggedRow.classList.remove('is-dragging');
+          draggedRow = null;
+          syncTotals();
+        };
+
+        itemsBody.addEventListener('drop', (event) => {
+          if (!draggedRow) return;
+          event.preventDefault();
+          finishDrag();
+        });
+        itemsBody.addEventListener('dragend', finishDrag);
+        itemsBody.addEventListener('dragenter', (event) => {
+          if (!draggedRow) return;
+          event.preventDefault();
+        });
+
+        itemsBody.addEventListener('mousedown', (event) => {
+          const target = event.target;
+          if (!(target instanceof HTMLElement)) return;
+          if (target.closest('[data-apply-suggestion]')) {
+            event.preventDefault();
+          }
+        });
+
+        itemsBody.addEventListener('keydown', async (event) => {
+          const target = event.target;
+          if (!(target instanceof HTMLInputElement)) return;
+          if (!target.matches('[data-item-description]')) return;
+          const row = target.closest('[data-item-row]');
+          if (!row) return;
+          const suggestionsBox = row.querySelector('[data-item-suggestions]');
+          const hasVisibleSuggestions = !!(suggestionsBox && !suggestionsBox.hidden);
+
+          if (event.key === 'ArrowDown') {
+            if (!hasVisibleSuggestions) await lookupSuggestionsForRow(row, { immediate: true, allowEmpty: true });
+            if (moveActiveSuggestion(row, 1)) event.preventDefault();
+            return;
+          }
+
+          if (event.key === 'ArrowUp') {
+            if (!hasVisibleSuggestions) await lookupSuggestionsForRow(row, { immediate: true, allowEmpty: true });
+            if (moveActiveSuggestion(row, -1)) event.preventDefault();
+            return;
+          }
+
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            const suggestion = activeSuggestionForRow(row, { requireExplicitSelection: true });
+            if (suggestion && hasVisibleSuggestions) {
+              applySuggestionToRow(row, suggestion, { focusDescription: true });
+            }
+            return;
+          }
+
+          if (event.key === 'Escape' && hasVisibleSuggestions) {
+            event.preventDefault();
+            hideSuggestions(row);
+          }
+        });
+
+        itemsBody.addEventListener('click', (event) => {
+          const target = event.target;
+          if (!(target instanceof HTMLElement)) return;
+
+          const suggestionButton = target.closest('[data-apply-suggestion]');
+          if (suggestionButton) {
+            const row = suggestionButton.closest('[data-item-row]');
+            const suggestions = row ? rowSuggestions.get(row) : [];
+            const index = Number(suggestionButton.getAttribute('data-apply-suggestion') || '-1');
+            const suggestion = Array.isArray(suggestions) ? suggestions[index] : null;
+            if (row && suggestion) {
+              applySuggestionToRow(row, suggestion, { focusDescription: true });
+            }
+            return;
+          }
+
+          const saveCatalogBtn = target.closest('[data-save-catalog-item]');
+          if (saveCatalogBtn) {
+            const row = saveCatalogBtn.closest('[data-item-row]');
+            saveRowToCatalog(row);
+            return;
+          }
+
+          const duplicateBtn = target.closest('[data-duplicate-item]');
+          if (duplicateBtn) {
+            const row = duplicateBtn.closest('[data-item-row]');
+            const duplicatedRow = row ? addRow({ insertAfterRow: row, sourceRow: row }) : null;
+            const descriptionInput = duplicatedRow?.querySelector('[data-item-description]');
+            if (descriptionInput instanceof HTMLInputElement) {
+              descriptionInput.focus();
+              try {
+                descriptionInput.setSelectionRange(0, descriptionInput.value.length);
+              } catch (_err) {
+                // noop
+              }
+            }
+            scheduleAutosave();
+            return;
+          }
+
+          const removeBtn = target.closest('[data-remove-item]');
+          if (!removeBtn) return;
+          const row = removeBtn.closest('[data-item-row]');
+          if (!row) return;
+          const allRows = [...itemsBody.querySelectorAll('[data-item-row]')];
+          if (allRows.length <= 1) {
+            row.querySelectorAll('input').forEach((input) => {
+              if (input.matches('[data-item-quantity]')) input.value = '1';
+              else if (input.matches('[data-item-vat-rate]')) input.value = isVatPayer ? defaultVatRate : '0';
+              else if (!input.matches('[data-item-vat-custom]')) input.value = '';
+            });
+            setRowVatValue(row, isVatPayer ? defaultVatRate : '0');
+            hideSuggestions(row);
+          } else {
+            row.remove();
+          }
+          ensureAtLeastOneRow();
+          syncTotals();
+          scheduleAutosave();
+        });
+
+        itemsBody.addEventListener('focusin', (event) => {
+          const target = event.target;
+          if (target instanceof HTMLElement) {
+            const rowCandidate = target.closest('[data-item-row]');
+            if (rowCandidate) activeRow = rowCandidate;
+          }
+          if (target instanceof HTMLInputElement && target.matches('[data-item-description]')) {
+            const row = target.closest('[data-item-row]');
+            hideAllSuggestions(row);
+            if (target.value.trim().length >= 2) {
+              lookupSuggestionsForRow(row, { immediate: true });
+            }
+            return;
+          }
+          if (!(target instanceof HTMLElement)) return;
+          const suggestionButton = target.closest('[data-apply-suggestion]');
+          if (!suggestionButton) return;
+          const row = suggestionButton.closest('[data-item-row]');
+          const index = Number(suggestionButton.getAttribute('data-apply-suggestion') || '-1');
+          if (row) setActiveSuggestionIndex(row, index);
+        });
+
+        itemsBody.addEventListener('input', (event) => {
+          const target = event.target;
+          if (!(target instanceof HTMLElement)) return;
+          if (target.matches('[data-item-vat-custom]')) {
+            const row = target.closest('[data-item-row]');
+            const hiddenInput = row?.querySelector('[data-item-vat-rate]');
+            if (hiddenInput) hiddenInput.value = target.value;
+          }
+          syncTotals();
+          if (target.matches('[data-item-description]')) {
+            const row = target.closest('[data-item-row]');
+            if (row) lookupSuggestionsForRow(row);
+          }
+          scheduleAutosave();
+        });
+
+        itemsBody.addEventListener('change', (event) => {
+          const target = event.target;
+          if (!(target instanceof HTMLElement)) return;
+          if (target.matches('[data-item-vat-select]')) {
+            const row = target.closest('[data-item-row]');
+            if (target.value === 'custom') {
+              const hiddenInput = row?.querySelector('[data-item-vat-rate]');
+              const customInput = row?.querySelector('[data-item-vat-custom]');
+              if (customInput) {
+                customInput.hidden = false;
+                customInput.value = hiddenInput?.value || defaultVatRate || '';
+                customInput.focus();
+                customInput.select?.();
+              }
+            } else {
+              setRowVatValue(row, target.value);
+            }
+          }
+          syncTotals();
+          scheduleAutosave();
+        });
+
+        itemsBody.addEventListener('focusout', (event) => {
+          const target = event.target;
+          if (!(target instanceof HTMLElement)) return;
+          if (!target.matches('[data-item-description]')) return;
+          const row = target.closest('[data-item-row]');
+          if (!row) return;
+          window.setTimeout(() => {
+            const active = document.activeElement;
+            if (active instanceof HTMLElement && row.contains(active) && active.closest('[data-item-suggestions]')) return;
+            if (!(document.activeElement instanceof HTMLElement) || !row.contains(document.activeElement)) {
+              hideSuggestions(row);
+            }
+          }, 120);
+        });
+
+        itemsBody.addEventListener('mousemove', (event) => {
+          const target = event.target;
+          if (!(target instanceof HTMLElement)) return;
+          const suggestionButton = target.closest('[data-apply-suggestion]');
+          if (!suggestionButton) return;
+          const row = suggestionButton.closest('[data-item-row]');
+          const index = Number(suggestionButton.getAttribute('data-apply-suggestion') || '-1');
+          if (row) setActiveSuggestionIndex(row, index);
+        });
+
+        document.addEventListener('click', (event) => {
+          const target = event.target;
+          if (!(target instanceof Node)) return;
+          if (!form.contains(target)) {
+            hideAllSuggestions();
+            return;
+          }
+          const currentTarget = event.target;
+          if (currentTarget instanceof HTMLElement && !currentTarget.closest('[data-item-desc-field]')) {
+            hideAllSuggestions();
+          }
+        });
+
+        currencyInput?.addEventListener('change', () => {
+          suggestionCache.clear();
+          hideAllSuggestions();
+          syncTotals();
+          syncCatalogCurrencyLabels();
+          refreshCatalogItems({ query: catalogSearchInput?.value || '', silent: true });
+          scheduleAutosave();
+        });
+        roundingToggle?.addEventListener('change', () => {
+          syncTotals();
+          scheduleAutosave();
+        });
+        discountInput?.addEventListener('input', () => {
+          syncTotals();
+          scheduleAutosave();
+        });
+
+        const toIsoDate = (value) => {
+          if (!value) return null;
+          const date = new Date(`${value}T00:00:00`);
+          return Number.isNaN(date.getTime()) ? null : date;
+        };
+
+        const addDays = (value, days) => {
+          const date = toIsoDate(value);
+          if (!date) return '';
+          date.setDate(date.getDate() + days);
+          const year = date.getFullYear();
+          const month = String(date.getMonth() + 1).padStart(2, '0');
+          const day = String(date.getDate()).padStart(2, '0');
+          return `${year}-${month}-${day}`;
+        };
+
+        const daysBetween = (startValue, endValue) => {
+          const start = toIsoDate(startValue);
+          const end = toIsoDate(endValue);
+          if (!start || !end) return null;
+          return Math.round((end.getTime() - start.getTime()) / 86400000);
+        };
+
+        const updateDueHint = () => {
+          if (!dueHint || !issueDateInput || !dueDateInput || !dueTermInput) return;
+          if (dueTermInput.value === 'custom') {
+            dueHint.textContent = 'Používá se ručně zadané datum splatnosti.';
+            return;
+          }
+          const diff = daysBetween(issueDateInput.value, dueDateInput.value);
+          if (diff === null) {
+            dueHint.textContent = 'Můžeš nechat termín, nebo ručně nastavit vlastní datum.';
+            return;
+          }
+          dueHint.textContent = `Splatnost je ${diff} dní od vystavení.`;
+        };
+
+        const syncDueDateFromTerm = () => {
+          if (!issueDateInput || !dueDateInput || !dueTermInput) return;
+          const selected = dueTermInput.value;
+          if (selected === 'custom') {
+            updateDueHint();
+            return;
+          }
+          const days = Number(selected);
+          if (!Number.isFinite(days)) return;
+          const nextDate = addDays(issueDateInput.value, days);
+          if (nextDate) dueDateInput.value = nextDate;
+          updateDueHint();
+        };
+
+        issueDateInput?.addEventListener('change', () => {
+          if (taxableSupplyDateInput && !taxableSupplyDateInput.value) taxableSupplyDateInput.value = issueDateInput.value;
+          if (dueTermInput?.value !== 'custom') syncDueDateFromTerm();
+          else updateDueHint();
+          syncSeriesPreview();
+          scheduleAutosave();
+        });
+
+        dueTermInput?.addEventListener('change', () => {
+          if (dueTermInput.value !== 'custom') syncDueDateFromTerm();
+          else updateDueHint();
+          scheduleAutosave();
+        });
+
+        dueDateInput?.addEventListener('change', () => {
+          if (!issueDateInput || !dueTermInput) return;
+          const diff = daysBetween(issueDateInput.value, dueDateInput.value);
+          if (diff === null) {
+            dueTermInput.value = 'custom';
+            updateDueHint();
+            return;
+          }
+          const option = [...dueTermInput.options].find((item) => item.value === String(diff));
+          dueTermInput.value = option ? String(diff) : 'custom';
+          updateDueHint();
+          scheduleAutosave();
+        });
+
+        const contactOptions = contactSelect
+          ? [...contactSelect.options]
+              .filter((option) => option.value)
+              .map((option) => ({
+                id: String(option.value),
+                name: String(option.textContent || '').trim(),
+                email: String(option.dataset.email || ''),
+                phone: String(option.dataset.phone || ''),
+                ico: String(option.dataset.ico || ''),
+                fixedVariableSymbol: String(option.dataset.fixedVariableSymbol || ''),
+                city: String(option.dataset.city || ''),
+                street: String(option.dataset.street || ''),
+                zip: String(option.dataset.zip || ''),
+                country: String(option.dataset.country || ''),
+              }))
+          : [];
+
+        const buildContactOption = (contact, selectedValue) => {
+          const option = document.createElement('option');
+          option.value = contact.id;
+          option.textContent = contact.name;
+          option.dataset.email = contact.email;
+          option.dataset.phone = contact.phone;
+          option.dataset.ico = contact.ico;
+          option.dataset.fixedVariableSymbol = contact.fixedVariableSymbol;
+          option.dataset.city = contact.city;
+          option.dataset.street = contact.street;
+          option.dataset.zip = contact.zip;
+          option.dataset.country = contact.country;
+          if (String(selectedValue || '') === String(contact.id)) {
+            option.selected = true;
+          }
+          return option;
+        };
+
+        const syncContactSearchFromSelection = () => {
+          if (!contactSearchInput || !contactSelect) return;
+          const selectedValue = String(contactSelect.value || '');
+          const selectedContact = contactOptions.find((item) => item.id === selectedValue);
+          if (!selectedContact) {
+            if (document.activeElement !== contactSearchInput) contactSearchInput.value = '';
+            return;
+          }
+          if (document.activeElement !== contactSearchInput || !contactSearchInput.value.trim()) {
+            contactSearchInput.value = selectedContact.name;
+          }
+        };
+
+        const filterContactOptions = () => {
+          if (!contactSelect) return;
+          const selectedValue = String(contactSelect.value || '');
+          const query = String(contactSearchInput?.value || '').trim().toLocaleLowerCase('cs');
+          const selectedContact = contactOptions.find((item) => item.id === selectedValue) || null;
+          const filtered = contactOptions.filter((item) => {
+            if (!query) return true;
+            const haystack = [item.name, item.ico, item.email].filter(Boolean).join(' ').toLocaleLowerCase('cs');
+            return haystack.includes(query);
+          });
+          const visibleContacts = selectedContact && !filtered.some((item) => item.id === selectedContact.id)
+            ? [selectedContact, ...filtered]
+            : filtered;
+
+          contactSelect.innerHTML = '';
+          const placeholder = document.createElement('option');
+          placeholder.value = '';
+          placeholder.disabled = true;
+          placeholder.selected = !selectedValue;
+          placeholder.textContent = visibleContacts.length ? 'Vyber kontakt' : 'Žádný kontakt neodpovídá hledání';
+          contactSelect.appendChild(placeholder);
+
+          visibleContacts.forEach((contact) => {
+            contactSelect.appendChild(buildContactOption(contact, selectedValue));
+          });
+
+          if (selectedValue) {
+            contactSelect.value = selectedValue;
+          }
+        };
+
+        const renderContactPreview = () => {
+          if (!contactSelect || !contactPreview) return;
+          const selected = contactSelect.options[contactSelect.selectedIndex];
+          if (!selected) {
+            contactPreview.innerHTML = '';
+            return;
+          }
+          const lines = [];
+          const ico = selected.dataset.ico || '';
+          const email = selected.dataset.email || '';
+          const phone = selected.dataset.phone || '';
+          const street = selected.dataset.street || '';
+          const zip = selected.dataset.zip || '';
+          const city = selected.dataset.city || '';
+          const country = selected.dataset.country || '';
+          if (ico) lines.push(`<span><strong>IČO:</strong> ${escapeHtml(ico)}</span>`);
+          if (email) lines.push(`<span><strong>E-mail:</strong> ${escapeHtml(email)}</span>`);
+          if (phone) lines.push(`<span><strong>Telefon:</strong> ${escapeHtml(phone)}</span>`);
+          const address = [street, zip, city, country].filter(Boolean).join(', ');
+          if (address) lines.push(`<span><strong>Adresa:</strong> ${escapeHtml(address)}</span>`);
+          contactPreview.innerHTML = lines.length
+            ? lines.join('<span class="invoice-contact-sep">•</span>')
+            : '<span class="invoice-editor-hint">U kontaktu zatím nejsou doplněné další údaje.</span>';
+        };
+
+        const syncVariableSymbolFromContact = () => {
+          if (!(variableSymbolInput instanceof HTMLInputElement) || !contactSelect) return;
+          const selected = contactSelect.options[contactSelect.selectedIndex];
+          const fixedVariableSymbol = String(selected?.dataset.fixedVariableSymbol || '').trim();
+          const current = String(variableSymbolInput.value || '').trim();
+          if (!current && fixedVariableSymbol) {
+            variableSymbolInput.value = fixedVariableSymbol;
+          }
+        };
+
+        const issueYear = () => {
+          const raw = (issueDateInput?.value || '').trim();
+          const match = raw.match(/^(\d{4})-/);
+          const parsed = Number(match?.[1] || new Date().getFullYear());
+          return Number.isFinite(parsed) ? parsed : new Date().getFullYear();
+        };
+
+        const buildSeriesPreview = (selected) => {
+          if (!selected) return 'Přidělí se při vystavení';
+          const year = issueYear();
+          const prefixRaw = String(selected.dataset.prefix || '').trim();
+          const cleanedPrefix = prefixRaw
+            .replace(/^20\d{2}[-_\/\s]*/, '')
+            .replace(/[^A-Za-z0-9/_-]+/g, '-')
+            .replace(/^[-_/]+|[-_/]+$/g, '');
+          const prefix = cleanedPrefix ? `${year}-${cleanedPrefix}-` : `${year}-`;
+          const padLength = Math.max(1, Math.min(Number(selected.dataset.padLength || '4') || 4, 20));
+          const lastCounter = Number(selected.dataset.lastCounter || '0') || 0;
+          const lastCounterYear = Number(selected.dataset.lastCounterYear || '') || null;
+          const nextCounter = lastCounterYear !== year ? 1 : lastCounter + 1;
+          return `${prefix}${String(nextCounter).padStart(padLength, '0')}`;
+        };
+
+        const syncSeriesPreview = () => {
+          if (!seriesSelect || seriesLocked) return;
+          const selected = seriesSelect.options[seriesSelect.selectedIndex];
+          const nextNumber = buildSeriesPreview(selected) || selected?.dataset?.nextNumber || 'Přidělí se při vystavení';
+          issuedNumberNodes.forEach((node) => {
+            node.textContent = nextNumber;
+          });
+        };
+
+        catalogListNode?.addEventListener('click', (event) => {
+          const target = event.target;
+          if (!(target instanceof HTMLElement)) return;
+          const itemNode = target.closest('[data-catalog-item-id]');
+          if (!itemNode) return;
+          if (target.closest('[data-apply-catalog-item]')) {
+            applyCatalogItem(extractCatalogItemFromNode(itemNode));
+            return;
+          }
+          const deleteBtn = target.closest('[data-delete-catalog-item]');
+          if (deleteBtn) {
+            deleteCatalogItem(deleteBtn.getAttribute('data-delete-catalog-item'));
+          }
+        });
+
+        catalogSearchInput?.addEventListener('input', () => {
+          if (catalogLookupTimer) window.clearTimeout(catalogLookupTimer);
+          catalogLookupTimer = window.setTimeout(() => {
+            refreshCatalogItems({ query: catalogSearchInput.value || '', silent: true });
+          }, 140);
+        });
+
+        contactSearchInput?.addEventListener('input', () => {
+          filterContactOptions();
+          renderContactPreview();
+        });
+        contactSelect?.addEventListener('change', () => {
+          syncContactSearchFromSelection();
+          renderContactPreview();
+          syncVariableSymbolFromContact();
+          scheduleAutosave();
+        });
+        seriesSelect?.addEventListener('change', syncSeriesPreview);
+        seriesSelect?.addEventListener('change', scheduleAutosave);
+        footerPresetSelect?.addEventListener('change', () => {
+          syncFooterPreset();
+          scheduleAutosave();
+        });
+
+        form.addEventListener('input', (event) => {
+          const target = event.target;
+          if (!(target instanceof HTMLElement)) return;
+          if (target.closest('#invoice-items-body')) return;
+          if (target.matches('[data-contact-search], [data-catalog-search]')) return;
+          if (target.matches('input, textarea, select')) scheduleAutosave();
+        });
+
+        form.addEventListener('change', (event) => {
+          const target = event.target;
+          if (!(target instanceof HTMLElement)) return;
+          if (target.closest('#invoice-items-body')) return;
+          if (target.matches('input, textarea, select')) scheduleAutosave();
+        });
+
+        form.addEventListener('click', (event) => {
+          const submitter = event.target instanceof HTMLElement ? event.target.closest('button[name="submit_action"]') : null;
+          if (submitter) lastSubmitter = submitter;
+        });
+
+        form.addEventListener('submit', async (event) => {
+          if (!autosaveEnabled || bypassAutosaveSubmit) return;
+          const submitter = event.submitter || lastSubmitter;
+          const action = String(submitter?.value || '').trim();
+          if (!['draft', 'issue'].includes(action)) return;
+          const existingAutosaveId = String(autosaveIdInput?.value || '').trim();
+          if (!existingAutosaveId && !formHasAutosaveContent()) return;
+          event.preventDefault();
+          try {
+            await runAutosave({ force: true });
+            if (!submitSavedDraft(action)) {
+              bypassAutosaveSubmit = true;
+              if (submitter && typeof form.requestSubmit === 'function') {
+                form.requestSubmit(submitter);
+              } else {
+                form.submit();
+              }
+            }
+          } catch (_err) {
+            // Status is already visible; keep the user on the page with their data.
+          }
+        });
+
+        ensureAtLeastOneRow();
+        itemsBody.querySelectorAll('[data-item-row]').forEach(syncVatControl);
+        filterContactOptions();
+        syncContactSearchFromSelection();
+        renderContactPreview();
+        syncVariableSymbolFromContact();
+        syncSeriesPreview();
+        updateDueHint();
+        syncCatalogCurrencyLabels();
+        syncFooterPreset();
+        refreshCatalogItems({ query: catalogSearchInput?.value || '', silent: true });
+        syncTotals();
+      })();
+    </script>
+  {% endif %}
+</div>
