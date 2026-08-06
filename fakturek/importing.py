@@ -13,7 +13,6 @@ It intentionally avoids any framework (FastAPI) imports.
 
 import json
 from dataclasses import dataclass
-from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError

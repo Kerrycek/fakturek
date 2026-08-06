@@ -1,4 +1,4 @@
-FROM python:3.12.10-slim
+FROM python:3.12.13-slim-trixie@sha256:646fb0bca3dd3ea1bcc6feb72c17ed16eed6e10cffc732fcc1478bd3e7f02d7b
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -12,7 +12,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends curl fonts-dejavu-core libharfbuzz0b libharfbuzz-subset0 libjpeg62-turbo libopenjp2-7 libpango-1.0-0 libpangoft2-1.0-0 mariadb-client shared-mime-info \
     && rm -rf /var/lib/apt/lists/*
 COPY --chown=fakturek:fakturek requirements.lock requirements.txt pyproject.toml alembic.ini ./
-RUN pip install --no-cache-dir -r requirements.lock
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 COPY --chown=fakturek:fakturek fakturek ./fakturek
 COPY --chown=fakturek:fakturek alembic ./alembic
 COPY --chown=fakturek:fakturek templates ./templates

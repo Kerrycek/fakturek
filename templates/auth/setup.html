@@ -28,7 +28,7 @@
     {% if setup_requires_token %}
       <div class="form-row">
         <label for="token">Setup token</label>
-        <input id="token" name="token" value="{{ prefill.token }}" autocomplete="off" />
+        <input id="token" name="token" type="password" value="" autocomplete="off" />
       </div>
     {% endif %}
 
@@ -44,12 +44,12 @@
 
     <div class="form-row">
       <label for="password">Heslo</label>
-      <input id="password" type="password" name="password" autocomplete="new-password" />
+      <input id="password" type="password" name="password" autocomplete="new-password" minlength="12" maxlength="1024" />
     </div>
 
     <div class="form-row">
       <label for="password2">Heslo (znovu)</label>
-      <input id="password2" type="password" name="password2" autocomplete="new-password" />
+      <input id="password2" type="password" name="password2" autocomplete="new-password" minlength="12" maxlength="1024" />
     </div>
 
     <input type="hidden" name="next" value="{{ next_url }}" />

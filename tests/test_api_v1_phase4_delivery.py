@@ -345,3 +345,47 @@ def test_api_v1_send_invoice_email_requires_issue_permission(monkeypatch, tmp_pa
 
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "subject_access_denied"
+
+
+def test_api_v1_email_failure_does_not_persist_return_or_log_smtp_secrets(
+    monkeypatch,
+    tmp_path,
+    caplog,
+):
+    client, SessionLocal, owner_token, _editor_token, _pdf_dir = _setup_sqlite_api_app(monkeypatch, tmp_path)
+
+    def _failing_send_via_smtp(_cfg, _msg):
+        raise RuntimeError("smtp-password=must-not-leak")
+
+    monkeypatch.setattr("fakturek.api_v1.send_via_smtp", _failing_send_via_smtp)
+
+    response = client.post(
+        "/api/v1/subjects/1/invoices/1/send-email",
+        headers={
+            "Authorization": f"Bearer {owner_token}",
+            "Idempotency-Key": "invoice-email-secret-failure-1",
+        },
+        json={"attach_pdf": False, "include_public_link": False},
+    )
+
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "invoice_email_send_failed"
+    assert "must-not-leak" not in response.text
+    assert "smtp-password" not in response.text
+    assert "must-not-leak" not in caplog.text
+    assert "smtp-password" not in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
+
+    log_response = client.get(
+        "/api/v1/subjects/1/invoices/1/emails",
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert log_response.status_code == 200
+    assert log_response.json()["items"][0]["error_message"] == "E-mail se nepodařilo odeslat."
+    assert "must-not-leak" not in log_response.text
+
+    with SessionLocal() as db:
+        from fakturek.models import InvoiceEmail
+
+        email_row = db.query(InvoiceEmail).filter(InvoiceEmail.invoice_id == 1).one()
+        assert email_row.error_message == "E-mail se nepodařilo odeslat."

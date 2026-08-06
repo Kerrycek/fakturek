@@ -615,7 +615,7 @@ def parse_isdoc_invoices_xml(xml_bytes: bytes) -> list[ParsedInvoice]:
     try:
         root = _safe_xml_fromstring(xml_bytes)
     except ET.ParseError as exc:
-        raise ValueError(f"Neplatné ISDOC XML: {exc}")
+        raise ValueError(f"Neplatné ISDOC XML: {exc}") from exc
 
     invoice_els = [root] if _norm(root.tag) == "invoice" else [el for el in root.iter() if _norm(el.tag) == "invoice"]
     invoices: list[ParsedInvoice] = []
@@ -743,7 +743,7 @@ def parse_fakturoid_invoices_xml(xml_bytes: bytes) -> list[ParsedInvoice]:
     try:
         root = _safe_xml_fromstring(xml_bytes)
     except ET.ParseError as exc:
-        raise ValueError(f"Neplatné XML: {exc}")
+        raise ValueError(f"Neplatné XML: {exc}") from exc
 
     root_tag = _norm(root.tag)
 
@@ -966,7 +966,7 @@ def parse_fakturoid_contacts_xml(xml_bytes: bytes) -> list[ParsedContact]:
     try:
         root = _safe_xml_fromstring(xml_bytes)
     except ET.ParseError as exc:
-        raise ValueError(f"Neplatné XML: {exc}")
+        raise ValueError(f"Neplatné XML: {exc}") from exc
 
     root_tag = _norm(root.tag)
     contact_tags = {"contact", "subject", "client"}
@@ -1025,7 +1025,7 @@ def parse_pohoda_invoices_xml(xml_bytes: bytes) -> list[ParsedInvoice]:
     try:
         root = _safe_xml_fromstring(xml_bytes)
     except ET.ParseError as exc:
-        raise ValueError(f"Neplatné XML: {exc}")
+        raise ValueError(f"Neplatné XML: {exc}") from exc
 
     invoices: list[ParsedInvoice] = []
     for inv_idx, inv_el in enumerate(_iter_descendants(root, "invoice"), start=1):
@@ -1145,7 +1145,7 @@ def parse_money_s3_invoices_xml(xml_bytes: bytes) -> list[ParsedInvoice]:
     try:
         root = _safe_xml_fromstring(xml_bytes)
     except ET.ParseError as exc:
-        raise ValueError(f"Neplatné XML: {exc}")
+        raise ValueError(f"Neplatné XML: {exc}") from exc
 
     invoice_nodes = _iter_descendants(root, "FaktVyd")
     if _norm(root.tag) == "faktvyd":
@@ -1291,7 +1291,7 @@ def _extract_pdf_text_lines(pdf_bytes: bytes) -> list[str]:
     try:
         reader = PdfReader(io.BytesIO(pdf_bytes))
     except Exception as exc:
-        raise ValueError(f"Neplatné PDF: {exc}")
+        raise ValueError(f"Neplatné PDF: {exc}") from exc
 
     text = "\n".join((page.extract_text() or "") for page in reader.pages)
     lines = _normalize_pdf_lines(text)
@@ -1727,13 +1727,8 @@ def _safe_resolve_under_root(root: Path, rel: str) -> Path:
     p = (base / (rel or "")).resolve()
     if p == base:
         raise ValueError("Prázdná cesta k import souboru")
-    try:
-        if not p.is_relative_to(base):
-            raise ValueError("Cesta k souboru je mimo import storage")
-    except AttributeError:
-        # Python <3.9 fallback
-        if str(base) not in str(p):
-            raise ValueError("Cesta k souboru je mimo import storage")
+    if not p.is_relative_to(base):
+        raise ValueError("Cesta k souboru je mimo import storage")
     return p
 
 
@@ -1762,7 +1757,7 @@ def detect_xml_import_format(xml_bytes: bytes) -> str:
     try:
         root = _safe_xml_fromstring(xml_bytes)
     except ET.ParseError as exc:
-        raise ValueError(f"Neplatné XML: {exc}")
+        raise ValueError(f"Neplatné XML: {exc}") from exc
 
     root_tag = _norm(root.tag)
     if root_tag == "invoice" and (str(root.tag).startswith("{http://isdoc.cz/") or str(root.attrib.get("version") or "").strip()):

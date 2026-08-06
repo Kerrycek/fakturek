@@ -1,13 +1,12 @@
 from __future__ import annotations
 from fakturek.time_utils import as_utc_aware, utc_now
 
-import time
-from collections import defaultdict, deque
 import hashlib
 import json
+import logging
 import re
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from math import ceil
 from pathlib import Path
@@ -38,6 +37,7 @@ from fakturek.bank_sync import (
     parse_csob_cz_email,
     parse_fio_email_cz,
     parse_raiffeisenbank_cz_email,
+    safe_bank_sync_error_message,
 )
 from fakturek.banking import (
     BankAccountPayload,
@@ -80,11 +80,9 @@ from fakturek.money import (
 )
 from fakturek.pdf import InvoicePDFData, render_invoice_pdf_bytes
 from fakturek.pdf_store import persist_pdf_bytes, read_pdf_bytes, resolve_storage_root, safe_filename_base
+from fakturek.rate_limit import SlidingWindowRateLimiter
 from fakturek.public_links import (
     build_public_invoice_urls,
-    build_public_invoice_relative_path,
-    build_public_invoice_short_code,
-    build_public_invoice_short_relative_path,
     ensure_invoice_public_link,
     generate_unique_invoice_public_token,
     resolve_public_base_url,
@@ -250,28 +248,6 @@ class ApiTokenSummaryModel(BaseModel):
     can_issue: bool
     can_export: bool
     is_sandbox: bool
-
-
-class SlidingWindowRateLimiter:
-    def __init__(self, *, max_requests: int, window_seconds: int) -> None:
-        self.max_requests = max(1, int(max_requests))
-        self.window_seconds = max(1, int(window_seconds))
-        self._hits: dict[str, deque[float]] = defaultdict(deque)
-
-    def check(self, key: str) -> tuple[bool, int, int]:
-        now = time.time()
-        window = float(self.window_seconds)
-        bucket = self._hits[str(key)]
-        cutoff = now - window
-        while bucket and bucket[0] < cutoff:
-            bucket.popleft()
-        if len(bucket) >= int(self.max_requests):
-            retry_after = int(ceil(window - (now - bucket[0]))) if bucket else int(self.window_seconds)
-            remaining = max(0, int(self.max_requests) - len(bucket))
-            return False, max(1, retry_after), remaining
-        bucket.append(now)
-        remaining = max(0, int(self.max_requests) - len(bucket))
-        return True, 0, remaining
 
 
 class DeleteResultModel(BaseModel):
@@ -2807,14 +2783,19 @@ class ApiV1Builder:
             except Exception as exc:
                 email_row.status = "error"
                 email_row.sent_at = None
-                email_row.error_message = str(exc)[:5000] or "Email send failed"
+                logging.getLogger("fakturek").error(
+                    "API invoice email failed for invoice %s (error_type=%s)",
+                    invoice_id,
+                    type(exc).__name__,
+                )
+                email_row.error_message = "E-mail se nepodařilo odeslat."
                 db.add(email_row)
                 db.commit()
                 raise ApiError(
                     502,
                     "invoice_email_send_failed",
                     "E-mail se nepodařilo odeslat.",
-                    {"invoice_id": int(invoice_id), "reason": email_row.error_message},
+                    {"invoice_id": int(invoice_id), "reason": "E-mail se nepodařilo odeslat."},
                 ) from exc
 
             if str(invoice.status or "").strip().lower() == "issued":
@@ -3589,14 +3570,19 @@ class ApiV1Builder:
                             message=str(exc.message),
                         )
                     )
-                except Exception as exc:
+                except Exception:
+                    logging.getLogger("fakturek").exception(
+                        "Unexpected bank transaction import failure for subject_id=%s bank_account_id=%s",
+                        subject_id,
+                        bank_account_id,
+                    )
                     results.append(
                         BankTransactionImportItemResult(
                             external_id=str(getattr(item, "external_id", "") or ""),
                             result="error",
                             matched=False,
                             transaction=None,
-                            message=str(exc)[:255] or "Import transakce selhal.",
+                            message="Import transakce selhal.",
                         )
                     )
 
@@ -3939,7 +3925,6 @@ class ApiV1Builder:
             db.add(usage_row)
             db.flush()
         used = int(getattr(usage_row, "request_count", 0) or 0)
-        remaining_before = max(0, limit - used)
         period_label = f"{year}-{month:02d}"
         if used >= limit:
             raise ApiError(
@@ -3968,8 +3953,8 @@ class ApiV1Builder:
         db.commit()
 
     def _rate_limit_api_token_or_429(self, db: Session, *, token: ApiToken) -> None:
-        ok, retry_after, remaining = self.api_rate_limiter.check(f"api-token:{int(token.id)}")
-        if ok:
+        decision = self.api_rate_limiter.check(f"api-token:{int(token.id)}")
+        if decision.allowed:
             self._consume_api_monthly_quota_or_429(db, token=token)
             return
         raise ApiError(
@@ -3980,12 +3965,12 @@ class ApiV1Builder:
                 "token_id": int(token.id),
                 "limit": int(self.api_rate_limiter.max_requests),
                 "window_seconds": int(self.api_rate_limiter.window_seconds),
-                "remaining": int(remaining),
+                "remaining": int(decision.remaining),
             },
             headers={
-                "Retry-After": str(retry_after),
+                "Retry-After": str(decision.retry_after),
                 "X-RateLimit-Limit": str(int(self.api_rate_limiter.max_requests)),
-                "X-RateLimit-Remaining": str(int(remaining)),
+                "X-RateLimit-Remaining": str(int(decision.remaining)),
                 "X-RateLimit-Window": str(int(self.api_rate_limiter.window_seconds)),
             },
         )
@@ -4070,7 +4055,11 @@ class ApiV1Builder:
             payment_sync_auto_pair=bool(row.payment_sync_auto_pair),
             payment_sync_last_checked_at=self._dt(row.payment_sync_last_checked_at),
             payment_sync_last_success_at=self._dt(row.payment_sync_last_success_at),
-            payment_sync_last_error=self._none_str(row.payment_sync_last_error),
+            payment_sync_last_error=(
+                safe_bank_sync_error_message(row.payment_sync_last_error)
+                if self._none_str(row.payment_sync_last_error)
+                else None
+            ),
         )
 
     def _serialize_catalog_item(self, row: InvoiceCatalogItem) -> CatalogItemModel:
@@ -4292,7 +4281,11 @@ class ApiV1Builder:
             status=str(row.status or ""),
             sent_at=self._dt(row.sent_at),
             message_id=self._none_str(row.message_id),
-            error_message=self._none_str(row.error_message),
+            error_message=(
+                "E-mail se nepodařilo odeslat."
+                if self._none_str(row.error_message)
+                else None
+            ),
             created_at=self._dt(row.created_at),
         )
 
@@ -4790,10 +4783,15 @@ class ApiV1Builder:
         except Exception as exc:
             email_row.status = "error"
             email_row.sent_at = None
-            email_row.error_message = (str(exc) or "Email send failed")[:5000]
+            logging.getLogger("fakturek").error(
+                "Automatic API invoice email failed for invoice %s (error_type=%s)",
+                getattr(invoice, "id", "?"),
+                type(exc).__name__,
+            )
+            email_row.error_message = "E-mail se nepodařilo odeslat."
             db.add(email_row)
             db.flush()
-            return False, email_row.error_message
+            return False, "E-mail se nepodařilo odeslat."
 
     def _run_recurring_plan_once(
         self,
@@ -6509,7 +6507,8 @@ class ApiV1Builder:
                 },
                 ensure_ascii=False,
                 sort_keys=True,
-            ).encode("utf-8", errors="ignore")
+            ).encode("utf-8", errors="ignore"),
+            usedforsecurity=False,
         ).hexdigest()
         return f"api-{digest}"
 
@@ -6816,9 +6815,14 @@ class ApiV1Builder:
                 since_uid=previous_last_email_uid or None,
             )
         except BankSyncError as exc:
-            account.payment_sync_last_error = str(exc)
+            logging.getLogger("fakturek").error(
+                "API IMAP bank sync failed for bank account %s (error_type=%s)",
+                getattr(account, "id", "?"),
+                type(exc).__name__,
+            )
+            account.payment_sync_last_error = safe_bank_sync_error_message(exc)
             db.add(account)
-            result["errors"].append(str(exc))
+            result["errors"].append(account.payment_sync_last_error)
             return BankSyncRunAccountModel(**result)
 
         result["fetched"] = len(imported_emails)
@@ -6958,9 +6962,14 @@ class ApiV1Builder:
                 timeout_seconds=float(getattr(self.settings, "fio_timeout_seconds", 10.0) or 10.0),
             )
         except BankSyncError as exc:
-            account.payment_sync_last_error = str(exc)
+            logging.getLogger("fakturek").error(
+                "API Fio bank sync failed for bank account %s (error_type=%s)",
+                getattr(account, "id", "?"),
+                type(exc).__name__,
+            )
+            account.payment_sync_last_error = safe_bank_sync_error_message(exc)
             db.add(account)
-            result["errors"].append(str(exc))
+            result["errors"].append(account.payment_sync_last_error)
             if bool(getattr(account, "payment_sync_auto_pair", True)):
                 _inspected, retry_matched = self._retry_existing_unmatched_bank_transactions(db, account=account)
                 result["matched"] += retry_matched

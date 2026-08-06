@@ -17,5 +17,6 @@ fi
 export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
 
 "$PYTHON_BIN" -m compileall -q fakturek tests tools
-"$PYTHON_BIN" -m ruff check fakturek tests tools --select F821,F601
+"$PYTHON_BIN" -m ruff check fakturek tests tools \
+  --select B011,B904,F401,F601,F811,F821,F823,F841
 "$PYTHON_BIN" -m pytest --disable-warnings

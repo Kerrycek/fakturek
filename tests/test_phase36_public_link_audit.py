@@ -118,6 +118,30 @@ def test_enable_public_link_for_imported_invoice_writes_audit_with_request(monke
     _reset_settings_and_db()
 
 
+def test_invalid_forwarded_ip_cannot_overflow_audit_column(monkeypatch, tmp_path):
+    monkeypatch.setenv("TRUSTED_PROXY_IPS", "testclient")
+    client, SessionLocal = _setup_sqlite_app(monkeypatch, tmp_path)
+
+    response = client.post(
+        "/invoices/1/public/enable",
+        data={"next": "/invoices/1"},
+        headers={"x-forwarded-for": "not-an-ip-" + "x" * 500},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+
+    from fakturek.models import AuditLog
+
+    with SessionLocal() as db:
+        audit_row = db.query(AuditLog).order_by(AuditLog.id.desc()).first()
+        assert audit_row is not None
+        assert audit_row.ip == "testclient"
+        assert len(audit_row.ip) <= 45
+
+    _reset_settings_and_db()
+
+
 def test_draft_invoice_hides_public_link_actions(monkeypatch, tmp_path):
     client, SessionLocal = _setup_sqlite_app(monkeypatch, tmp_path)
 

@@ -3,7 +3,9 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from functools import lru_cache
-from urllib.parse import urlparse
+from urllib.parse import urlsplit
+
+from fakturek.security import validate_outbound_base_url
 
 
 def _getenv(name: str, default: str | None = None) -> str | None:
@@ -148,6 +150,8 @@ def get_settings() -> Settings:
     """Load settings from environment with sane defaults for development."""
 
     app_env = (_getenv("APP_ENV", "dev") or "dev").strip().lower()
+    if app_env not in {"dev", "test", "prod"}:
+        raise RuntimeError("APP_ENV must be one of: dev, test, prod")
     debug = _parse_bool(_getenv("DEBUG"), default=(app_env != "prod"))
 
     secret_key = (
@@ -228,6 +232,18 @@ def get_settings() -> Settings:
         if len(values) != len(set(values)):
             raise RuntimeError("Security secrets must be different from each other")
 
+    def _external_base_url(name: str, value: str) -> str:
+        if not str(value or "").strip():
+            return ""
+        try:
+            return validate_outbound_base_url(
+                value,
+                name=name,
+                require_https=(app_env == "prod"),
+            )
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
+
     issuer_name = (_getenv("ISSUER_NAME", "") or "").strip()
     issuer_email = (_getenv("ISSUER_EMAIL", "") or "").strip()
     issuer_phone = (_getenv("ISSUER_PHONE", "") or "").strip()
@@ -240,19 +256,20 @@ def get_settings() -> Settings:
     issuer_bank_account = (_getenv("ISSUER_BANK_ACCOUNT", "") or "").strip()
 
     # Company lookup (CZ: ARES). Keep configurable for deployments.
-    ares_base_url = (
+    ares_base_url = _external_base_url("ARES_BASE_URL", (
         _getenv(
             "ARES_BASE_URL",
             "https://ares.gov.cz/ekonomicke-subjekty-v-be/rest/ekonomicke-subjekty",
         )
         or ""
-    ).strip().rstrip("/")
+    ).strip())
 
     # Network timeout for ARES requests.
     try:
         ares_timeout_seconds = float((_getenv("ARES_TIMEOUT_SECONDS", "5") or "5").strip())
     except ValueError:
         ares_timeout_seconds = 5.0
+    ares_timeout_seconds = min(60.0, max(0.1, ares_timeout_seconds))
 
     # Cache TTL for company lookup responses.
     try:
@@ -261,61 +278,63 @@ def get_settings() -> Settings:
         )
     except ValueError:
         company_lookup_cache_ttl_days = 30
+    company_lookup_cache_ttl_days = min(3650, max(0, company_lookup_cache_ttl_days))
 
     # Company lookup (SK: RPO + ORSR fallback)
-    sk_rpo_base_url = (
+    sk_rpo_base_url = _external_base_url("SK_RPO_BASE_URL", (
         _getenv(
             "SK_RPO_BASE_URL",
             "https://api.statistics.sk/rpo/v1",
         )
         or ""
-    ).strip().rstrip("/")
+    ).strip())
 
     try:
         sk_rpo_timeout_seconds = float((_getenv("SK_RPO_TIMEOUT_SECONDS", "5") or "5").strip())
     except ValueError:
         sk_rpo_timeout_seconds = 5.0
+    sk_rpo_timeout_seconds = min(60.0, max(0.1, sk_rpo_timeout_seconds))
 
-    sk_orsr_base_url = (
+    sk_orsr_base_url = _external_base_url("SK_ORSR_BASE_URL", (
         _getenv(
             "SK_ORSR_BASE_URL",
             "https://www.orsr.sk",
         )
         or ""
-    ).strip().rstrip("/")
+    ).strip())
 
     try:
         sk_orsr_timeout_seconds = float((_getenv("SK_ORSR_TIMEOUT_SECONDS", "5") or "5").strip())
     except ValueError:
         sk_orsr_timeout_seconds = 5.0
+    sk_orsr_timeout_seconds = min(60.0, max(0.1, sk_orsr_timeout_seconds))
 
     # PDF storage (phase-20)
     pdf_storage_dir = (_getenv("PDF_STORAGE_DIR", "var/pdfs") or "var/pdfs").strip()
 
     # Public invoice (phase-21)
-    public_base_url = (_getenv("PUBLIC_BASE_URL", "") or "").strip().rstrip("/")
-    app_base_url = (_getenv("APP_BASE_URL", public_base_url) or public_base_url or "").strip().rstrip("/")
+    public_base_url = _external_base_url(
+        "PUBLIC_BASE_URL",
+        (_getenv("PUBLIC_BASE_URL", "") or "").strip(),
+    )
+    app_base_url = _external_base_url(
+        "APP_BASE_URL",
+        (_getenv("APP_BASE_URL", public_base_url) or public_base_url or "").strip(),
+    )
     if app_env == "prod":
         for name, value in (
             ("PUBLIC_BASE_URL", public_base_url),
             ("APP_BASE_URL", app_base_url),
         ):
-            parsed = urlparse(value)
-            if (
-                parsed.scheme != "https"
-                or not parsed.hostname
-                or parsed.username
-                or parsed.password
-                or parsed.query
-                or parsed.fragment
-                or parsed.path not in {"", "/"}
-            ):
+            parsed = urlsplit(value)
+            if not value or parsed.path not in {"", "/"}:
                 raise RuntimeError(f"{name} must be a canonical HTTPS origin in production")
 
     try:
         public_rate_limit_max = int((_getenv("PUBLIC_RATE_LIMIT_MAX", "120") or "120").strip())
     except ValueError:
         public_rate_limit_max = 120
+    public_rate_limit_max = min(1_000_000, max(1, public_rate_limit_max))
 
     try:
         public_rate_limit_window_seconds = int(
@@ -323,6 +342,7 @@ def get_settings() -> Settings:
         )
     except ValueError:
         public_rate_limit_window_seconds = 60
+    public_rate_limit_window_seconds = min(86_400, max(1, public_rate_limit_window_seconds))
 
     # SMTP email (phase-22)
     smtp_host = (_getenv("SMTP_HOST", "") or "").strip()
@@ -330,6 +350,7 @@ def get_settings() -> Settings:
         smtp_port = int((_getenv("SMTP_PORT", "587") or "587").strip())
     except ValueError:
         smtp_port = 587
+    smtp_port = min(65_535, max(1, smtp_port))
 
     smtp_username = (_getenv("SMTP_USERNAME") or "").strip() or None
     smtp_password = (_getenv("SMTP_PASSWORD") or "").strip() or None
@@ -341,6 +362,7 @@ def get_settings() -> Settings:
         smtp_timeout_seconds = float((_getenv("SMTP_TIMEOUT_SECONDS", "10") or "10").strip())
     except ValueError:
         smtp_timeout_seconds = 10.0
+    smtp_timeout_seconds = min(300.0, max(0.1, smtp_timeout_seconds))
 
     smtp_from_email = (_getenv("SMTP_FROM_EMAIL", "") or "").strip()
     smtp_from_name = (_getenv("SMTP_FROM_NAME", "") or "").strip()
@@ -352,25 +374,28 @@ def get_settings() -> Settings:
         import_max_upload_mb = int((_getenv("IMPORT_MAX_UPLOAD_MB", "25") or "25").strip())
     except ValueError:
         import_max_upload_mb = 25
+    import_max_upload_mb = min(1024, max(1, import_max_upload_mb))
 
-    fio_api_base_url = (
+    fio_api_base_url = _external_base_url("FIO_API_BASE_URL", (
         _getenv(
             "FIO_API_BASE_URL",
             "https://fioapi.fio.cz/v1/rest",
         )
         or ""
-    ).strip().rstrip("/")
+    ).strip())
 
     try:
         fio_timeout_seconds = float((_getenv("FIO_TIMEOUT_SECONDS", "30") or "30").strip())
     except ValueError:
         fio_timeout_seconds = 30.0
+    fio_timeout_seconds = min(300.0, max(0.1, fio_timeout_seconds))
 
     payment_sync_imap_host = (_getenv("PAYMENT_SYNC_IMAP_HOST", "") or "").strip()
     try:
         payment_sync_imap_port = int((_getenv("PAYMENT_SYNC_IMAP_PORT", "993") or "993").strip())
     except ValueError:
         payment_sync_imap_port = 993
+    payment_sync_imap_port = min(65_535, max(1, payment_sync_imap_port))
     payment_sync_imap_username = (_getenv("PAYMENT_SYNC_IMAP_USERNAME") or "").strip() or None
     payment_sync_imap_password = (_getenv("PAYMENT_SYNC_IMAP_PASSWORD") or "").strip() or None
     payment_sync_imap_mailbox = (_getenv("PAYMENT_SYNC_IMAP_MAILBOX", "INBOX") or "INBOX").strip() or "INBOX"
@@ -388,28 +413,32 @@ def get_settings() -> Settings:
         login_rate_limit_max = int((_getenv("LOGIN_RATE_LIMIT_MAX", "10") or "10").strip())
     except ValueError:
         login_rate_limit_max = 10
+    login_rate_limit_max = min(1_000_000, max(1, login_rate_limit_max))
     try:
         login_rate_limit_window_seconds = int(
             (_getenv("LOGIN_RATE_LIMIT_WINDOW_SECONDS", "60") or "60").strip()
         )
     except ValueError:
         login_rate_limit_window_seconds = 60
+    login_rate_limit_window_seconds = min(86_400, max(1, login_rate_limit_window_seconds))
 
     try:
         api_rate_limit_max = int((_getenv("API_RATE_LIMIT_MAX", "240") or "240").strip())
     except ValueError:
         api_rate_limit_max = 240
+    api_rate_limit_max = min(1_000_000, max(1, api_rate_limit_max))
     try:
         api_rate_limit_window_seconds = int(
             (_getenv("API_RATE_LIMIT_WINDOW_SECONDS", "60") or "60").strip()
         )
     except ValueError:
         api_rate_limit_window_seconds = 60
+    api_rate_limit_window_seconds = min(86_400, max(1, api_rate_limit_window_seconds))
     try:
         api_monthly_quota_max = int((_getenv("API_MONTHLY_QUOTA_MAX", "2500") or "2500").strip())
     except ValueError:
         api_monthly_quota_max = 2500
-    api_monthly_quota_max = max(1, int(api_monthly_quota_max))
+    api_monthly_quota_max = min(100_000_000, max(1, int(api_monthly_quota_max)))
 
     # CSRF protection is enabled by default in production. It can be disabled
     # explicitly via CSRF_ENABLED=0 for development/testing convenience.

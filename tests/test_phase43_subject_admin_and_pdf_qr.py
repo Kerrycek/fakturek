@@ -385,7 +385,7 @@ def test_settings_can_create_subject_and_link_new_user(monkeypatch, tmp_path):
         data={
             "username": "klient-admin",
             "email": "admin@klient.test",
-            "password": "heslo12345",
+            "password": "heslo1234567",
             "role": "manager",
             "can_view": "1",
             "can_edit": "1",
@@ -408,6 +408,28 @@ def test_settings_can_create_subject_and_link_new_user(monkeypatch, tmp_path):
         assert link.can_edit is True
         assert link.can_issue is True
 
+    _reset_settings_and_db()
+
+
+def test_settings_does_not_reflect_temporary_password_on_validation_error(monkeypatch, tmp_path):
+    client, _SessionLocal = _setup_sqlite_app(monkeypatch, tmp_path)
+    _login(client)
+    temporary_password = "very-secret-temporary-password"
+
+    response = client.post(
+        "/settings/subjects/1/users/create",
+        data={
+            "username": "x",
+            "email": "admin@example.test",
+            "password": temporary_password,
+            "role": "manager",
+            "can_view": "1",
+        },
+    )
+
+    assert response.status_code == 400
+    assert temporary_password not in response.text
+    assert 'name="password" type="password"' in response.text
     _reset_settings_and_db()
 
 

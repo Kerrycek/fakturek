@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+
+{% block title %}Potvrzení registrace – fakturek{% endblock %}
+
+{% block head_extra %}
+  <style>
+    .signup-pending-wrap {
+      min-height: calc(100vh - 15rem);
+      display: flex;
+      align-items: flex-start;
+      padding-top: clamp(2.5rem, 7vh, 5rem);
+    }
+
+    .signup-pending-panel {
+      width: min(100%, 38rem);
+    }
+
+    .signup-pending-panel .card-body {
+      padding: clamp(1.25rem, 3vw, 2rem);
+    }
+
+    .signup-pending-heading {
+      max-width: 32rem;
+      margin-bottom: 1.75rem;
+    }
+
+    .signup-pending-heading .page-kicker {
+      margin-bottom: .45rem;
+    }
+
+    .signup-pending-heading h1 {
+      margin-bottom: .5rem;
+    }
+
+    .signup-pending-heading p,
+    .signup-pending-footer-note {
+      margin: 0;
+      color: var(--tblr-secondary);
+    }
+
+    .signup-pending-footer-note {
+      margin-top: 1rem;
+    }
+
+    @media (max-width: 767.98px) {
+      .signup-pending-wrap {
+        min-height: auto;
+        padding-top: 1.5rem;
+      }
+
+      .signup-pending-panel .card-body {
+        padding: 1.25rem;
+      }
+    }
+  </style>
+{% endblock %}
+
+{% block content %}
+  <section class="signup-pending-wrap">
+    <div class="signup-pending-panel stack-md">
+      {% if error %}
+        <div class="notice error">
+          <p><strong>{{ error }}</strong></p>
+        </div>
+      {% endif %}
+
+      {% if info %}
+        <div class="notice success">
+          <p>{{ info }}</p>
+        </div>
+      {% endif %}
+
+      <div class="card">
+        <div class="card-body">
+          <div class="signup-pending-heading">
+            <p class="page-kicker">Registrace</p>
+            <h1>Zkontroluj e-mail</h1>
+            {% if email_sent and masked_email %}
+              <p>Na adresu {{ masked_email }} jsme poslali odkaz pro aktivaci účtu.</p>
+            {% else %}
+              <p>Účet aktivuješ potvrzovacím odkazem, který ti pošleme e-mailem.</p>
+            {% endif %}
+          </div>
+
+          {% if email %}
+            <form class="form" method="post" action="/signup/resend-verification">
+              {{ csrf_input(request)|safe }}
+              <input type="hidden" name="email" value="{{ email }}" />
+              <input type="hidden" name="next" value="{{ next_url }}" />
+
+              <p class="muted">Odkaz nedorazil? Zkontroluj spam, nebo si nech poslat nový.</p>
+              <div class="form-actions">
+                <button class="btn" type="submit">Poslat potvrzovací e-mail znovu</button>
+              </div>
+            </form>
+          {% endif %}
+        </div>
+      </div>
+
+      <p class="signup-pending-footer-note">
+        Účet už je aktivní? <a href="/login">Přejít na přihlášení</a>.
+      </p>
+    </div>
+  </section>
+{% endblock %}

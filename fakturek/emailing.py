@@ -12,7 +12,6 @@ Design goals:
 """
 
 from dataclasses import dataclass
-from datetime import datetime
 from email.message import EmailMessage
 from email.utils import formataddr, make_msgid
 from html import escape
