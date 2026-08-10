@@ -10,8 +10,8 @@ Requirements: Docker with Compose, Python 3 and OpenSSL. MariaDB 10.11 is includ
 stack and is the supported database; SQLite is not a supported deployment target.
 
 ```bash
-git clone https://github.com/Kerrycek/fakturek.cz.git
-cd fakturek.cz
+git clone https://github.com/Kerrycek/fakturek.git
+cd fakturek
 ./tools/init_env.sh
 docker compose up -d --build
 docker compose ps
@@ -71,7 +71,7 @@ not need Python, MariaDB, Apache, Nginx or PHP installed directly on the host.
 
 ```bash
 install -d -m 0755 /opt/fakturek
-git clone https://github.com/Kerrycek/fakturek.cz.git /opt/fakturek
+git clone https://github.com/Kerrycek/fakturek.git /opt/fakturek
 cd /opt/fakturek
 ./tools/init_env.sh https://invoices.example.com
 docker compose config --quiet
@@ -116,8 +116,9 @@ verify DNS and that ports 80 and 443 reach this VPS.
 
 ### 5. Create the first account and close setup
 
-Open the setup URL printed by `init_env.sh`. The URL contains a secret token, so do not
-publish or log it. Create the first account with a unique password of at least 12 characters.
+Open the `/setup` URL printed by `init_env.sh` and paste the separately printed one-time
+token into the form. Do not publish or log the token. Create the first account with a
+unique password of at least 12 characters.
 
 Immediately afterward, remove the bootstrap token and recreate the app container:
 

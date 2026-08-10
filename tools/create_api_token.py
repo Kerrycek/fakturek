@@ -4,7 +4,7 @@ from fakturek.time_utils import utc_now
 
 import argparse
 import sys
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]

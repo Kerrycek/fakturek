@@ -7,7 +7,7 @@ import io
 import lzma
 import re
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 
 import qrcode

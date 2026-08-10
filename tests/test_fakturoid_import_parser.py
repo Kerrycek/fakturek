@@ -7,6 +7,7 @@ import pytest
 
 from fakturek.fakturoid_import import (
     _payload_to_xml_bytes,
+    _safe_resolve_under_root,
     detect_xml_import_format,
     parse_fakturoid_invoices_xml,
     parse_money_s3_invoices_xml,
@@ -232,9 +233,21 @@ def test_parse_money_s3_xml_basic():
     assert inv.lines[0].unit == "month"
     assert inv.total_cents == 12000
 
+
 def test_xml_safety_rejects_doctype_after_long_prefix():
     from fakturek.security import ensure_safe_xml_bytes
 
     payload = b"<!--" + (b"a" * 9000) + b"--><!DOCTYPE root><root/>"
     with pytest.raises(ValueError):
         ensure_safe_xml_bytes(payload)
+
+
+def test_import_storage_path_cannot_escape_to_sibling_directory(tmp_path):
+    storage_root = tmp_path / "imports"
+    storage_root.mkdir()
+    sibling = tmp_path / "imports-private" / "secret.xml"
+    sibling.parent.mkdir()
+    sibling.write_text("secret")
+
+    with pytest.raises(ValueError, match="mimo import storage"):
+        _safe_resolve_under_root(storage_root, "../imports-private/secret.xml")

@@ -64,8 +64,9 @@ chmod 0600 .env
 
 echo "Created .env for ${app_env} mode."
 echo "Start Fakturek with: docker compose up -d --build"
-echo "Then open: ${base_url}/setup?token=${setup_token}"
+echo "Then open: ${base_url}/setup"
+echo "Setup token (paste into the form): ${setup_token}"
 echo "After creating the first account, close setup with:"
 echo "  sed -i '/^SETUP_TOKEN=/d' .env"
 echo "  docker compose up -d --force-recreate app"
-echo "Keep this setup URL private. It contains a one-time secret."
+echo "Keep the setup token private. It is a one-time secret."

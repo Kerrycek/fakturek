@@ -7,8 +7,20 @@ Thank you for helping improve Fakturek.
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
-pip install -r requirements.txt -r requirements-dev.txt
+pip install --require-hashes -r requirements.lock
+pip install --require-hashes -r requirements-dev.lock
 cp .env.example .env
+```
+
+When dependencies change, regenerate the hashed lock files with
+`pip-tools==7.5.3`:
+
+```bash
+pip-compile --generate-hashes --strip-extras \
+  --output-file=requirements.lock requirements.txt
+pip-compile --generate-hashes --allow-unsafe --strip-extras \
+  --constraint=requirements.lock \
+  --output-file=requirements-dev.lock requirements-dev.txt
 ```
 
 Use development-only random values in `.env`, start MariaDB with `docker compose up -d db`,

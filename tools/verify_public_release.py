@@ -21,7 +21,6 @@ FORBIDDEN_PATHS = (
     "templates/checkout/subscription.html",
     "templates/payments/comgate_return.html",
     "templates/auth/signup_order.html",
-    "templates/auth/signup_pending.html",
     "alembic/versions/20260423_56_platform_admin_flag.py",
     "alembic/versions/20260425_58_subject_subscriptions_and_invoice_origin.py",
     "alembic/versions/20260530_60_subscription_billing_exempt.py",
@@ -141,7 +140,15 @@ def main() -> int:
     if symlinks:
         errors.append(f"Release contains symlinks: {symlinks}")
 
-    required_files = ("LICENSE", "README.md", "SECURITY.md", "docs/INSTALLATION.md", ".env.example")
+    required_files = (
+        "LICENSE",
+        "README.md",
+        "SECURITY.md",
+        "docs/INSTALLATION.md",
+        ".env.example",
+        "requirements.lock",
+        "requirements-dev.lock",
+    )
     missing_required = [relative for relative in required_files if not (ROOT / relative).is_file()]
     if missing_required:
         errors.append(f"Required release files are missing: {missing_required}")

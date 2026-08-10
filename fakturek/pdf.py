@@ -286,14 +286,6 @@ def render_invoice_pdf_bytes(data: InvoicePDFData) -> bytes:
         textColor=colors.HexColor(palette["accent"]),
         spaceAfter=4,
     )
-    header_label_style = ParagraphStyle(
-        "header_label",
-        parent=styles["BodyText"],
-        fontName=bold_font,
-        fontSize=9,
-        leading=11,
-        textColor=colors.HexColor(palette["muted"]),
-    )
     header_value_style = ParagraphStyle(
         "header_value",
         parent=styles["BodyText"],
@@ -301,15 +293,6 @@ def render_invoice_pdf_bytes(data: InvoicePDFData) -> bytes:
         fontSize=10,
         leading=13,
         textColor=colors.HexColor(palette["text"]),
-    )
-    total_value_style = ParagraphStyle(
-        "total_value",
-        parent=styles["BodyText"],
-        fontName=bold_font,
-        fontSize=16,
-        leading=18,
-        textColor=colors.HexColor(palette["text"]),
-        alignment=2,
     )
     card_title_style = ParagraphStyle(
         "card_title",
@@ -334,11 +317,6 @@ def render_invoice_pdf_bytes(data: InvoicePDFData) -> bytes:
         fontSize=8.6,
         leading=11,
         textColor=colors.HexColor(palette["muted"]),
-    )
-    body_muted_style = ParagraphStyle(
-        "body_muted",
-        parent=p_style,
-        textColor=colors.HexColor("#5f6b7a"),
     )
     table_header_style = ParagraphStyle(
         "table_header",

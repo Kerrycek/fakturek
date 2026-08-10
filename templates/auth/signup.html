@@ -70,13 +70,13 @@
 
           <div class="form-row">
             <label for="password">Heslo</label>
-            <input id="password" name="password" type="password" autocomplete="new-password" minlength="8" required data-signup-password aria-describedby="signup-password-hint" />
-            <small id="signup-password-hint" class="muted" data-signup-password-hint aria-live="polite">Alespoň 8 znaků.</small>
+            <input id="password" name="password" type="password" autocomplete="new-password" minlength="12" maxlength="1024" required data-signup-password aria-describedby="signup-password-hint" />
+            <small id="signup-password-hint" class="muted" data-signup-password-hint aria-live="polite">Alespoň 12 znaků.</small>
           </div>
 
           <div class="form-row">
             <label for="password2">Heslo znovu</label>
-            <input id="password2" name="password2" type="password" autocomplete="new-password" required data-signup-password-confirm />
+            <input id="password2" name="password2" type="password" autocomplete="new-password" minlength="12" maxlength="1024" required data-signup-password-confirm />
           </div>
         </div>
       </section>
@@ -183,10 +183,10 @@
       const refreshPasswordHint = () => {
         if (!passwordInput || !passwordHint) return;
         const value = passwordInput.value || '';
-        const shouldShowHint = value.length === 0 || value.length < 8;
+        const shouldShowHint = value.length === 0 || value.length < 12;
         passwordHint.hidden = !shouldShowHint;
-        const validationMessage = (passwordHint.textContent || 'Alespoň 8 znaků.').trim();
-        passwordInput.setCustomValidity(value.length > 0 && value.length < 8 ? validationMessage : '');
+        const validationMessage = (passwordHint.textContent || 'Alespoň 12 znaků.').trim();
+        passwordInput.setCustomValidity(value.length > 0 && value.length < 12 ? validationMessage : '');
       };
 
       lookupIcoInput?.addEventListener('input', () => syncIco(lookupIcoInput, manualIcoInput));

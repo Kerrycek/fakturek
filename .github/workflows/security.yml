@@ -1,5 +1,6 @@
 name: security
 on:
+  workflow_dispatch:
   push:
   pull_request:
 permissions:
@@ -12,19 +13,21 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
-      - run: python -m pip install --upgrade pip
-      - run: pip install -r requirements.txt -r requirements-dev.txt pip-audit cyclonedx-bom detect-secrets
+      - run: pip install --require-hashes -r requirements.lock
+      - run: pip install --require-hashes -r requirements-dev.lock
       - run: python -m playwright install --with-deps chromium
       - run: python -m compileall -q fakturek alembic
       - run: ./tools/verify_public_release.py
       - run: pip check
+      - run: bandit -r fakturek -q -ll
       - run: pytest -q
       - run: pip-audit --no-deps --disable-pip -r requirements.lock
+      - run: pip-audit --no-deps --disable-pip -r requirements-dev.lock
       - run: cyclonedx-py requirements requirements.lock --output-file sbom.cdx.json
       - name: Reject new potential secrets
         run: |
           detect-secrets scan --baseline .secrets.baseline \
-            --exclude-files '(^|/)(\.git|\.venv|\.pytest_cache|\.ruff_cache|static/vendor|requirements\.lock)(/|$)'
+            --exclude-files '(^|/)(\.git|\.venv|\.pytest_cache|\.ruff_cache|static/vendor|requirements(?:-dev)?\.lock)(/|$)'
           python - <<'PY'
           import json
 

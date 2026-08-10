@@ -45,7 +45,6 @@ import os
 import secrets
 import sys
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 
 # When this script is executed as a file ("python tools/seed_user.py"),
@@ -56,7 +55,6 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
-
 
 @dataclass(frozen=True)
 class SeedConfig:
@@ -106,6 +104,8 @@ def _getenv_bool(name: str, default: bool = False) -> bool:
 
 
 def load_config() -> SeedConfig:
+    from fakturek.auth import MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH
+
     app_env = (_getenv("APP_ENV", "dev") or "dev").strip().lower()
     username_default = None if app_env == "prod" else "owner"
     email_default = None if app_env == "prod" else "owner@example.com"
@@ -154,6 +154,11 @@ def load_config() -> SeedConfig:
         raise ValueError("FAKTUREK_BOOTSTRAP_USERNAME must be at least 3 characters")
     if "@" not in email:
         raise ValueError("FAKTUREK_BOOTSTRAP_EMAIL must look like an email")
+    if not MIN_PASSWORD_LENGTH <= len(password) <= MAX_PASSWORD_LENGTH:
+        raise ValueError(
+            "FAKTUREK_BOOTSTRAP_PASSWORD must contain between "
+            f"{MIN_PASSWORD_LENGTH} and {MAX_PASSWORD_LENGTH} characters"
+        )
     if len(subject_country) != 2:
         raise ValueError("FAKTUREK_BOOTSTRAP_SUBJECT_COUNTRY must have 2 characters")
     if len(subject_default_currency) != 3:

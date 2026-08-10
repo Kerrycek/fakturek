@@ -43,12 +43,13 @@ You do not need a LAMP stack. Fakturek ships its Python application and MariaDB 
 Docker Compose; the host only needs Docker, Compose and a reverse proxy for HTTPS.
 
 ```bash
-git clone https://github.com/Kerrycek/fakturek.cz.git
-cd fakturek.cz
+git clone https://github.com/Kerrycek/fakturek.git
+cd fakturek
 ./tools/init_env.sh
 ```
 
-The script creates `.env` with independent random secrets and prints the local setup URL.
+The script creates `.env` with independent random secrets and prints the local setup URL
+and a separate one-time token.
 For a production installation, pass the canonical HTTPS origin to the script as described
 in the installation guide. Then start the stack:
 
@@ -58,8 +59,8 @@ docker compose ps
 ```
 
 The app listens only on `127.0.0.1:${APP_PORT:-8000}`. MariaDB is available only
-inside the Compose network. Open the setup URL printed by the script to create the first
-account, then remove `SETUP_TOKEN` from `.env` and restart the app.
+inside the Compose network. Open `/setup`, paste the token printed by the script, create
+the first account, then remove `SETUP_TOKEN` from `.env` and restart the app.
 
 For a fresh Debian VPS, including DNS, Caddy, HTTPS, firewall and post-install checks,
 follow the tested [production walkthrough](docs/INSTALLATION.md#fresh-debian-vps-with-caddy).
@@ -71,7 +72,8 @@ follow the tested [production walkthrough](docs/INSTALLATION.md#fresh-debian-vps
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
-pip install -r requirements.txt -r requirements-dev.txt
+pip install --require-hashes -r requirements.lock
+pip install --require-hashes -r requirements-dev.lock
 ```
 
 ### 2. Configure environment
@@ -128,7 +130,7 @@ uvicorn fakturek.main:app --reload --port 8000
 Open:
 
 - App: http://127.0.0.1:8000/
-- Setup: http://127.0.0.1:8000/setup?token=change-me-in-development-setup
+- Setup: http://127.0.0.1:8000/setup (paste `SETUP_TOKEN` into the form)
 - Health check: http://127.0.0.1:8000/healthz
 - Database health check: http://127.0.0.1:8000/healthz/db
 
@@ -144,10 +146,10 @@ AUTH_REQUIRED=1
 SETUP_TOKEN=some-long-random-token
 ```
 
-Then open:
+Then open `/setup` and paste the token into the protected form:
 
 ```text
-/setup?token=some-long-random-token
+http://127.0.0.1:8000/setup
 ```
 
 After the first account exists, setup is skipped unless the environment explicitly allows it.
@@ -249,6 +251,11 @@ The core can load an optional extension module through `fakturek.extensions`. Se
 `FAKTUREK_EXTENSION_MODULE` to an installed Python module exposing
 `register_fakturek_extension(app, context=...)`. Leave it unset for the standalone app.
 
+An extension runs inside the Fakturek process and receives access to the application,
+runtime settings, templates, and project paths. Treat it as fully trusted server code:
+install only modules you control, pin their versions, and never use this hook to load
+tenant-provided or otherwise untrusted packages.
+
 ## Production Notes
 
 For production deployments:
@@ -261,6 +268,8 @@ For production deployments:
 - Run migrations before app restart
 - Configure SMTP only through secrets/environment
 - Remove `SETUP_TOKEN` after bootstrap
+- For multiple workers or replicas, enforce a shared rate limit at the reverse proxy or with
+  an external rate-limit service; built-in limits are local to one application process
 
 MariaDB/MySQL is required. SQLite is used by selected unit tests, but it is not a supported
 deployment database and the historical Alembic chain is not designed for it.

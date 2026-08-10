@@ -5,14 +5,23 @@ import json
 import html as _html
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from fakturek.security import validate_outbound_base_url
+
 
 class CompanyLookupError(RuntimeError):
     """Raised when company lookup fails (validation, network, provider error)."""
+
+
+def _validated_provider_base_url(base_url: str, *, name: str) -> str:
+    try:
+        return validate_outbound_base_url(base_url, name=name)
+    except ValueError as exc:
+        raise CompanyLookupError(str(exc)) from exc
 
 
 def normalize_ico(raw: str | None) -> str:
@@ -94,6 +103,7 @@ def fetch_ares_economic_subject(
 
     if not (base_url or "").strip():
         raise CompanyLookupError("ARES_BASE_URL není nastaveno.")
+    base_url = _validated_provider_base_url(base_url, name="ARES_BASE_URL")
 
     url = f"{base_url.rstrip('/')}/{ico_norm}"
     req = Request(
@@ -106,7 +116,8 @@ def fetch_ares_economic_subject(
     )
 
     try:
-        with urlopen(req, timeout=timeout_seconds) as resp:
+        # The administrator-configured base URL is restricted to HTTP(S) above.
+        with urlopen(req, timeout=timeout_seconds) as resp:  # nosec B310
             body = resp.read()
     except HTTPError as exc:
         try:
@@ -155,6 +166,7 @@ def fetch_rpo_search(
 
     if not (base_url or "").strip():
         raise CompanyLookupError("SK_RPO_BASE_URL není nastaveno.")
+    base_url = _validated_provider_base_url(base_url, name="SK_RPO_BASE_URL")
 
     url = f"{base_url.rstrip('/')}/search?identifier={ico_norm}"
     req = Request(
@@ -167,7 +179,8 @@ def fetch_rpo_search(
     )
 
     try:
-        with urlopen(req, timeout=timeout_seconds) as resp:
+        # The administrator-configured base URL is restricted to HTTP(S) above.
+        with urlopen(req, timeout=timeout_seconds) as resp:  # nosec B310
             body = resp.read()
     except HTTPError as exc:
         try:
@@ -441,6 +454,7 @@ def fetch_orsr_company_by_ico(
         raise CompanyLookupError("Neplatné IČO.")
     if not (base_url or "").strip():
         raise CompanyLookupError("SK_ORSR_BASE_URL není nastaveno.")
+    base_url = _validated_provider_base_url(base_url, name="SK_ORSR_BASE_URL")
 
     search_url = f"{base_url.rstrip('/')}/hladaj_ico.asp?ICO={ico_norm}&SID=0"
     req = Request(
@@ -453,7 +467,8 @@ def fetch_orsr_company_by_ico(
     )
 
     try:
-        with urlopen(req, timeout=timeout_seconds) as resp:
+        # The administrator-configured base URL is restricted to HTTP(S) above.
+        with urlopen(req, timeout=timeout_seconds) as resp:  # nosec B310
             body = resp.read()
     except HTTPError as exc:
         raise CompanyLookupError(f"ORSR vrátil chybu HTTP {getattr(exc, 'code', '?')}") from exc
@@ -485,7 +500,8 @@ def fetch_orsr_company_by_ico(
         method="GET",
     )
     try:
-        with urlopen(req2, timeout=timeout_seconds) as resp:
+        # The administrator-configured base URL is restricted to HTTP(S) above.
+        with urlopen(req2, timeout=timeout_seconds) as resp:  # nosec B310
             body2 = resp.read()
     except HTTPError as exc:
         raise CompanyLookupError(f"ORSR vrátil chybu HTTP {getattr(exc, 'code', '?')}") from exc

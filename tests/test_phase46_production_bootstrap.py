@@ -4,6 +4,7 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from fakturek.main import create_app
@@ -143,8 +144,6 @@ def test_seed_user_requires_explicit_identity_in_prod(monkeypatch):
 
     seed_user = _load_seed_user_module()
 
-    try:
+    with pytest.raises(ValueError) as exc_info:
         seed_user.load_config()
-        assert False, "expected load_config() to require explicit prod seed identity"
-    except ValueError as exc:
-        assert "FAKTUREK_BOOTSTRAP_USERNAME" in str(exc) or "FAKTUREK_BOOTSTRAP_EMAIL" in str(exc)
+    assert "FAKTUREK_BOOTSTRAP_USERNAME" in str(exc_info.value) or "FAKTUREK_BOOTSTRAP_EMAIL" in str(exc_info.value)

@@ -18,10 +18,32 @@ from urllib.request import Request, urlopen
 
 from fakturek.banking import digits_only, normalize_spaces
 from fakturek.money import parse_money_to_signed_cents
+from fakturek.security import validate_outbound_base_url
 
 
 class BankSyncError(RuntimeError):
     """Raised when bank sync communication or payload parsing fails."""
+
+
+_USER_SAFE_BANK_SYNC_ERRORS = frozenset(
+    {
+        "IMAP schránka pro bankovní notifikace zatím není nastavená.",
+        "Tento provider zatím neumíme synchronizovat.",
+        "Chybí Fio API token.",
+        "Účet vlastníka byl zrušen.",
+    }
+)
+
+
+def safe_bank_sync_error_message(value: object) -> str:
+    """Return only operator-authored bank sync messages to browser/API clients."""
+
+    message = str(value or "").strip()
+    if not message:
+        return ""
+    if message in _USER_SAFE_BANK_SYNC_ERRORS:
+        return message
+    return "Synchronizace plateb se nepodařila. Podrobnosti jsou v serverovém logu."
 
 
 @dataclass(frozen=True)
@@ -229,7 +251,8 @@ def _build_email_external_id(imported: ImportedBankEmail) -> str:
         "body_text": imported.body_text,
     }
     digest = hashlib.sha1(
-        json.dumps(parts, ensure_ascii=False, sort_keys=True).encode("utf-8", errors="ignore")
+        json.dumps(parts, ensure_ascii=False, sort_keys=True).encode("utf-8", errors="ignore"),
+        usedforsecurity=False,
     ).hexdigest()
     return f"email-{digest}"
 
@@ -466,7 +489,6 @@ def parse_csas_cz_email(imported: ImportedBankEmail) -> ImportedBankTransaction:
     if not fields:
         raise BankSyncError("Nepodařilo se z e-mailu České spořitelny vyčíst informace o transakci.")
 
-    body = _normalize_email_body(imported.body_text or "")
     amount_raw = (
         fields.get(_normalize_label("Částka v měně účtu"))
         or fields.get(_normalize_label("Částka v měně transakce"))
@@ -586,7 +608,8 @@ def _build_external_id(values: dict[str, str], raw_payload: dict[str, Any]) -> s
     if external_id:
         return external_id
     digest = hashlib.sha1(
-        json.dumps(raw_payload, ensure_ascii=False, sort_keys=True).encode("utf-8", errors="ignore")
+        json.dumps(raw_payload, ensure_ascii=False, sort_keys=True).encode("utf-8", errors="ignore"),
+        usedforsecurity=False,
     ).hexdigest()
     return f"fio-{digest}"
 
@@ -663,6 +686,10 @@ def fetch_fio_transactions(
         raise BankSyncError("Chybí Fio API token.")
     if not (base_url or "").strip():
         raise BankSyncError("Chybí FIO_API_BASE_URL.")
+    try:
+        base_url = validate_outbound_base_url(base_url, name="FIO_API_BASE_URL")
+    except ValueError as exc:
+        raise BankSyncError(str(exc)) from exc
 
     url = (
         f"{base_url.rstrip('/')}/periods/{quote(clean_token, safe='')}/"
@@ -678,7 +705,8 @@ def fetch_fio_transactions(
     )
 
     try:
-        with urlopen(req, timeout=timeout_seconds) as resp:
+        # The administrator-configured base URL is restricted to HTTP(S) above.
+        with urlopen(req, timeout=timeout_seconds) as resp:  # nosec B310
             body = resp.read()
     except HTTPError as exc:
         try:

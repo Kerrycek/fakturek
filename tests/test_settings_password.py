@@ -302,3 +302,42 @@ def test_password_reset_flow_changes_password_and_invalidates_token(monkeypatch,
     assert "už není platný" in reused.text
 
     _reset_settings_and_db()
+
+
+def test_password_reset_does_not_expose_smtp_exception(monkeypatch, tmp_path):
+    def failing_send_via_smtp(_cfg, _msg):
+        raise RuntimeError("smtp-password=must-not-leak")
+
+    monkeypatch.setattr("fakturek.main.send_via_smtp", failing_send_via_smtp)
+    client, _SessionLocal = _setup_sqlite_app(monkeypatch, tmp_path)
+
+    response = client.post(
+        "/password/reset",
+        data={"mode": "request", "email": "demo@example.test"},
+    )
+
+    assert response.status_code == 200
+    assert "Pokud u nás tenhle e-mail existuje" in response.text
+    assert "smtp-password" not in response.text
+    assert "RuntimeError" not in response.text
+    _reset_settings_and_db()
+
+
+def test_password_reset_email_requests_are_rate_limited(monkeypatch, tmp_path):
+    monkeypatch.setenv("LOGIN_RATE_LIMIT_MAX", "1")
+    monkeypatch.setattr("fakturek.main.send_via_smtp", lambda _cfg, _msg: ("<sent@example.test>", "sent"))
+    client, _SessionLocal = _setup_sqlite_app(monkeypatch, tmp_path)
+
+    first = client.post(
+        "/password/reset",
+        data={"mode": "request", "email": "demo@example.test"},
+    )
+    second = client.post(
+        "/password/reset",
+        data={"mode": "request", "email": "demo@example.test"},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert int(second.headers["Retry-After"]) >= 1
+    _reset_settings_and_db()

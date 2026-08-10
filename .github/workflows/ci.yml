@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -26,8 +27,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt -r requirements-dev.txt
+          python -m pip install --require-hashes -r requirements.lock
+          python -m pip install --require-hashes -r requirements-dev.lock
           python -m playwright install --with-deps chromium
 
       - name: Compile application
@@ -77,11 +78,12 @@ jobs:
 
       - name: Verify setup and login flow
         run: |
-          python -m pip install --quiet httpx
           python - <<'PY'
+          from http.cookiejar import CookieJar
           from pathlib import Path
           import re
-          import httpx
+          from urllib.parse import urlencode
+          from urllib.request import HTTPCookieProcessor, Request, build_opener
 
           values = {}
           for line in Path('.env').read_text().splitlines():
@@ -91,45 +93,50 @@ jobs:
 
           base_url = 'http://127.0.0.1:8000'
           setup_token = values['SETUP_TOKEN']
-          with httpx.Client(base_url=base_url, follow_redirects=False) as client:
-              page = client.get('/setup', params={'token': setup_token})
-              page.raise_for_status()
-              match = re.search(r'name="csrf_token"[^>]+value="([^"]+)"', page.text)
-              assert match, 'setup CSRF token missing'
-              response = client.post('/setup', data={
+          opener = build_opener(HTTPCookieProcessor(CookieJar()))
+
+          def get(path):
+              with opener.open(base_url + path, timeout=10) as response:
+                  return response.geturl(), response.read().decode('utf-8')
+
+          def post(path, data):
+              request = Request(
+                  base_url + path,
+                  data=urlencode(data).encode('utf-8'),
+                  method='POST',
+              )
+              with opener.open(request, timeout=10) as response:
+                  return response.geturl(), response.read().decode('utf-8')
+
+          _, page = get('/setup')
+          match = re.search(r'name="csrf_token"[^>]+value="([^"]+)"', page)
+          assert match, 'setup CSRF token missing'
+          final_url, home = post('/setup', {
                   'csrf_token': match.group(1),
                   'token': setup_token,
                   'username': 'selfhost-admin',
                   'email': 'admin@example.test',
                   'password': 'correct-horse-battery-staple',
                   'password2': 'correct-horse-battery-staple',
-              })
-              assert response.status_code == 303, response.text
+          })
+          assert final_url.rstrip('/') == base_url, final_url
+          assert 'selfhost-admin' in home
 
-              home = client.get(response.headers.get('location', '/'))
-              home.raise_for_status()
-              assert 'selfhost-admin' in home.text
+          _, logout = get('/logout')
+          match = re.search(r'name="csrf_token"[^>]+value="([^"]+)"', logout)
+          assert match, 'logout CSRF token missing'
+          post('/logout', {'csrf_token': match.group(1)})
 
-              logout = client.get('/logout')
-              logout.raise_for_status()
-              match = re.search(r'name="csrf_token"[^>]+value="([^"]+)"', logout.text)
-              assert match, 'logout CSRF token missing'
-              response = client.post('/logout', data={'csrf_token': match.group(1)})
-              assert response.status_code == 303, response.text
-
-              login = client.get('/login')
-              login.raise_for_status()
-              match = re.search(r'name="csrf_token"[^>]+value="([^"]+)"', login.text)
-              assert match, 'login CSRF token missing'
-              response = client.post('/login', data={
-                  'csrf_token': match.group(1),
-                  'identifier': 'selfhost-admin',
-                  'password': 'correct-horse-battery-staple',
-              })
-              assert response.status_code == 303, response.text
-              home = client.get(response.headers.get('location', '/'))
-              home.raise_for_status()
-              assert 'selfhost-admin' in home.text
+          _, login = get('/login')
+          match = re.search(r'name="csrf_token"[^>]+value="([^"]+)"', login)
+          assert match, 'login CSRF token missing'
+          final_url, home = post('/login', {
+              'csrf_token': match.group(1),
+              'identifier': 'selfhost-admin',
+              'password': 'correct-horse-battery-staple',
+          })
+          assert final_url.rstrip('/') == base_url, final_url
+          assert 'selfhost-admin' in home
           PY
 
       - name: Verify HTML PDF renderer in container

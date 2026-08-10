@@ -151,7 +151,7 @@
             </div>
           </div>
           <p class="muted settings-section-copy">
-            Pro změnu hesla je potřeba zadat současné heslo. Nové heslo musí mít alespoň 8 znaků.
+            Pro změnu hesla je potřeba zadat současné heslo. Nové heslo musí mít alespoň 12 znaků.
           </p>
           <form method="post" action="/settings/password" class="form">
             {{ csrf_input(request)|safe }}
@@ -163,12 +163,12 @@
 
             <div class="form-row">
               <label for="new_password">Nové heslo</label>
-              <input id="new_password" name="new_password" type="password" autocomplete="new-password" />
+              <input id="new_password" name="new_password" type="password" autocomplete="new-password" minlength="12" maxlength="1024" />
             </div>
 
             <div class="form-row">
               <label for="new_password2">Nové heslo znovu</label>
-              <input id="new_password2" name="new_password2" type="password" autocomplete="new-password" />
+              <input id="new_password2" name="new_password2" type="password" autocomplete="new-password" minlength="12" maxlength="1024" />
             </div>
 
             <div class="form-actions">
@@ -725,7 +725,7 @@
                       <td>
                         {{ account.payment_sync_last_success_at or '—' }}
                         {% if account.payment_sync_last_error %}
-                          <div class="muted settings-bank-error">{{ account.payment_sync_last_error }}</div>
+                          <div class="muted settings-bank-error">{{ safe_bank_sync_error_message(account.payment_sync_last_error) }}</div>
                         {% endif %}
                       </td>
                       <td>{{ account.invoice_count or 0 }}</td>

@@ -371,6 +371,43 @@ def test_api_v1_phase8_import_transactions_supports_partial_results(monkeypatch,
     _reset_settings_and_db()
 
 
+def test_api_v1_phase8_import_transactions_hides_unexpected_errors(monkeypatch, tmp_path):
+    client, _SessionLocal, token = _setup_sqlite_api_app(monkeypatch, tmp_path)
+
+    from fakturek.api_v1 import ApiV1Builder
+
+    leaked_detail = "database password=do-not-return-this"
+
+    def _fail_import(*args, **kwargs):
+        raise RuntimeError(leaked_detail)
+
+    monkeypatch.setattr(ApiV1Builder, "_manual_imported_bank_transaction", _fail_import)
+
+    response = client.post(
+        "/api/v1/subjects/1/bank-accounts/1/import-transactions",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "items": [
+                {
+                    "external_id": "api-error-001",
+                    "booked_on": "2026-03-18",
+                    "amount": "10.00",
+                    "currency": "CZK",
+                    "direction": "incoming",
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["items"][0]["result"] == "error"
+    assert body["items"][0]["message"] == "Import transakce selhal."
+    assert leaked_detail not in response.text
+
+    _reset_settings_and_db()
+
+
 def test_api_v1_phase8_import_email_then_reprocess_with_parser(monkeypatch, tmp_path):
     client, SessionLocal, token = _setup_sqlite_api_app(monkeypatch, tmp_path)
     auth = {"Authorization": f"Bearer {token}"}

@@ -24,7 +24,8 @@ import io
 import unicodedata
 import zipfile
 import xml.etree.ElementTree as ET
-from collections import defaultdict, deque
+from collections import defaultdict
+from ipaddress import ip_address
 from math import ceil
 
 from fastapi import Depends, FastAPI, Request, HTTPException
@@ -75,6 +76,7 @@ from fakturek.bank_sync import (
     parse_csob_cz_email,
     parse_fio_email_cz,
     parse_raiffeisenbank_cz_email,
+    safe_bank_sync_error_message,
 )
 from fakturek.settings import get_settings
 from fakturek.invoice_themes import INVOICE_PDF_THEME_OPTIONS, INVOICE_PDF_THEME_DESCRIPTIONS, normalize_invoice_pdf_theme, pdf_theme_to_invoice_style
@@ -86,8 +88,9 @@ from fakturek.ui_i18n import (
     ui_translation_payload,
 )
 
-from fakturek.auth import hash_password, needs_rehash, verify_password
+from fakturek.auth import hash_password, needs_rehash, new_password_length_error, verify_password
 from fakturek.api_tokens import create_api_token as create_personal_api_token
+from fakturek.rate_limit import SlidingWindowRateLimiter
 from fakturek.security import csv_safe_cell, decrypt_secret, encrypt_secret
 
 from fakturek.pdf import (
@@ -136,10 +139,21 @@ from fakturek.extensions import register_optional_extensions
 def create_app() -> FastAPI:
     settings = get_settings()
 
-    app = FastAPI(title="fakturek", debug=settings.debug)
+    # The browser application has no public machine API of its own. Keeping
+    # FastAPI's generated root schema enabled would expose an inventory of all
+    # internal HTML and job routes. The intentionally public API v1 mounts its
+    # separately documented schema below /api/v1.
+    app = FastAPI(
+        title="fakturek",
+        debug=settings.debug,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
 
     project_root = Path(__file__).resolve().parents[1]
     templates = Jinja2Templates(directory=str(project_root / "templates"))
+    templates.env.globals["safe_bank_sync_error_message"] = safe_bank_sync_error_message
 
     # ------------------------------------------------------------------
     # Template globals for environment-driven build metadata and optional
@@ -240,17 +254,25 @@ def create_app() -> FastAPI:
                         payload["traceback"] = traceback.format_exc()
                         if errors_log_path:
                             payload["errors_log"] = errors_log_path
-                    return JSONResponse(status_code=500, content=payload)
+                    resp = JSONResponse(status_code=500, content=payload)
+                    resp.headers["X-Request-ID"] = req_id
+                    return _apply_security_headers(request, resp)
 
-                # HTML: always include request_id; include traceback when enabled.
-                msg = f"{type(exc).__name__}: {str(exc)}".strip() or "Internal Server Error"
-                tb = traceback.format_exc()
+                # HTML responses stay generic unless verbose errors were
+                # explicitly enabled. Tracebacks and local log paths may
+                # contain credentials, SQL, or deployment details.
+                msg = "Internal Server Error"
                 extra = ""
-                if verbose_errors:
-                    extra = f"<h2>Traceback</h2><pre>{escape(tb)}</pre>"
                 log_hint = ""
-                if errors_log_path:
-                    log_hint = f"<p class=\"muted\"><small>Log: <code>{escape(errors_log_path)}</code></small></p>"
+                if verbose_errors:
+                    msg = f"{type(exc).__name__}: {str(exc)}".strip() or msg
+                    tb = traceback.format_exc()
+                    extra = f"<h2>Traceback</h2><pre>{escape(tb)}</pre>"
+                    if errors_log_path:
+                        log_hint = (
+                            '<p class="muted"><small>Log: '
+                            f"<code>{escape(errors_log_path)}</code></small></p>"
+                        )
 
                 html = (
                     "<!doctype html><html lang=\"cs\"><head><meta charset=\"utf-8\">"
@@ -269,7 +291,7 @@ def create_app() -> FastAPI:
                 )
                 resp = HTMLResponse(content=html, status_code=500)
                 resp.headers["X-Request-ID"] = req_id
-                return resp
+                return _apply_security_headers(request, resp)
 
     def _load_bootstrap_credentials() -> dict[str, str] | None:
         if settings.app_env == "prod":
@@ -289,33 +311,6 @@ def create_app() -> FastAPI:
     templates.env.globals['app_base_url'] = (str(getattr(settings, 'app_base_url', '') or '').rstrip('/') if str(getattr(settings, 'app_base_url', '') or '').strip() not in {'', '/'} else '')
     templates.env.globals['bootstrap_credentials'] = _load_bootstrap_credentials()
 
-    # ------------------------------------------------------------------
-    # Public invoice (phase-21): simple in-memory rate limiter
-    # ------------------------------------------------------------------
-    # This protects public invoice URLs from brute-force and accidental
-    # hammering. It is intentionally simple and per-process (each worker
-    # has its own limiter).
-    class SlidingWindowRateLimiter:
-        def __init__(self, *, max_requests: int, window_seconds: int) -> None:
-            self.max_requests = max(1, int(max_requests))
-            self.window_seconds = max(1, int(window_seconds))
-            self._hits: dict[str, deque[float]] = defaultdict(deque)
-
-        def check(self, key: str) -> tuple[bool, int]:
-            now = time.time()
-            window = float(self.window_seconds)
-            q = self._hits[str(key)]
-            # Prune old timestamps.
-            cutoff = now - window
-            while q and q[0] < cutoff:
-                q.popleft()
-            if len(q) >= int(self.max_requests):
-                # Retry after the oldest hit leaves the window.
-                retry_after = int(ceil(window - (now - q[0]))) if q else int(self.window_seconds)
-                return False, max(1, retry_after)
-            q.append(now)
-            return True, 0
-
     _public_rate_limiter = SlidingWindowRateLimiter(
         max_requests=int(getattr(settings, "public_rate_limit_max", 120) or 120),
         window_seconds=int(getattr(settings, "public_rate_limit_window_seconds", 60) or 60),
@@ -330,9 +325,11 @@ def create_app() -> FastAPI:
         max_requests=int(getattr(settings, "login_rate_limit_max", 10) or 10),
         window_seconds=int(getattr(settings, "login_rate_limit_window_seconds", 60) or 60),
     )
+    _auth_email_rate_limiter = SlidingWindowRateLimiter(
+        max_requests=max(1, min(5, int(getattr(settings, "login_rate_limit_max", 10) or 10))),
+        window_seconds=max(60, int(getattr(settings, "login_rate_limit_window_seconds", 60) or 60)),
+    )
 
-    LOGIN_FAILURE_LOCK_THRESHOLD = 3
-    LOGIN_FAILURE_LOCK_SECONDS = 60 * 60
     SESSION_MAX_AGE_OPTIONS = [
         (1, "1 den"),
         (3, "3 dny"),
@@ -354,13 +351,23 @@ def create_app() -> FastAPI:
         # consider additional headers (e.g. X-Forwarded-For) as needed.
         ip = _client_ip(request)
         key = f"login:{ip}"
-        ok, retry_after = _login_rate_limiter.check(key)
-        if ok:
+        decision = _login_rate_limiter.check(key)
+        if decision.allowed:
             return
         raise HTTPException(
             status_code=429,
             detail="Too many login attempts; please try again later.",
-            headers={"Retry-After": str(retry_after)},
+            headers={"Retry-After": str(decision.retry_after)},
+        )
+
+    def _auth_email_rate_limit_or_429(request: Request) -> None:
+        decision = _auth_email_rate_limiter.check(f"auth-email:{_client_ip(request)}")
+        if decision.allowed:
+            return
+        raise HTTPException(
+            status_code=429,
+            detail="Too many email requests; please try again later.",
+            headers={"Retry-After": str(decision.retry_after)},
         )
 
 
@@ -484,12 +491,27 @@ def create_app() -> FastAPI:
         source = exc if exc is not None else _db_import_error
         return _safe_exception_message(source, fallback="Databáze je dočasně nedostupná.")
 
+    def _safe_operation_error(exc: Exception | str | None, *, fallback: str) -> str:
+        """Keep operational details in development without leaking them in production."""
+
+        if _detailed_errors_enabled():
+            detail = str(exc or "").strip()
+            if detail:
+                return f"{fallback}: {detail}"
+        return str(fallback)
+
     def _client_ip(request: Request) -> str:
         direct_ip = ""
         try:
             direct_ip = str(request.client.host if request.client else "").strip()
         except Exception:
             direct_ip = ""
+
+        def _validated_ip(value: object | None) -> str:
+            try:
+                return str(ip_address(str(value or "").strip()))
+            except ValueError:
+                return ""
 
         trusted_proxies = {
             str(item or "").strip().lower()
@@ -501,11 +523,10 @@ def create_app() -> FastAPI:
             if xff:
                 chain = [part.strip() for part in xff.split(",") if part.strip()]
                 for candidate in reversed(chain):
-                    if candidate.lower() not in trusted_proxies:
-                        return candidate
-                if chain:
-                    return chain[-1]
-        return direct_ip or "unknown"
+                    validated = _validated_ip(candidate)
+                    if validated and validated.lower() not in trusted_proxies:
+                        return validated
+        return _validated_ip(direct_ip) or direct_ip[:45] or "unknown"
 
     def _request_scope_path(request: Request) -> str:
         """Return the canonical ASGI path for auth / ACL decisions.
@@ -643,13 +664,13 @@ def create_app() -> FastAPI:
         if not bucket:
             bucket = "pdf" if _request_scope_path(request).rstrip("/").endswith("/pdf") else "view"
         key = f"public:{ip}:{bucket}"
-        ok, retry_after = _public_rate_limiter.check(key)
-        if ok:
+        decision = _public_rate_limiter.check(key)
+        if decision.allowed:
             return
         raise HTTPException(
             status_code=429,
             detail="Rate limit exceeded",
-            headers={"Retry-After": str(retry_after)},
+            headers={"Retry-After": str(decision.retry_after)},
         )
 
     # ------------------------------------------------------------------
@@ -1615,8 +1636,10 @@ def create_app() -> FastAPI:
             token = _ensure_csrf_token(request)
         except Exception:
             token = ""
-        # The HTML is marked safe by Jinja automatically when inserted.
-        return f'<input type="hidden" name="csrf_token" value="{token}" />'
+        # Templates deliberately mark this small helper as safe, so keep the
+        # dynamic value escaped even though generated tokens are currently hex.
+        safe_token = escape(str(token), quote=True)
+        return f'<input type="hidden" name="csrf_token" value="{safe_token}" />'
 
     templates.env.globals["csrf_input"] = _csrf_input
 
@@ -2509,7 +2532,19 @@ def create_app() -> FastAPI:
         if not next_url:
             return default
         u = str(next_url).strip()
-        if u.startswith("/") and not u.startswith("//") and _is_safe_navigation_next_path(u):
+        if "\\" in u or any(ord(char) < 0x20 or ord(char) == 0x7F for char in u):
+            return default
+        try:
+            parsed = urlsplit(u)
+        except ValueError:
+            return default
+        if (
+            u.startswith("/")
+            and not u.startswith("//")
+            and not parsed.scheme
+            and not parsed.netloc
+            and _is_safe_navigation_next_path(u)
+        ):
             return u
         return default
 
@@ -2626,6 +2661,7 @@ def create_app() -> FastAPI:
                 "/password/reset",
                 "/setup",
                 "/signup",
+                "/signup/pending",
                 "/signup/verify",
                 "/signup/resend-verification",
             }:
@@ -2660,7 +2696,14 @@ def create_app() -> FastAPI:
                             except StopIteration:
                                 pass
                     except Exception:
-                        invalid_reason = None
+                        logging.getLogger("fakturek").exception(
+                            "Session validation failed"
+                        )
+                        return JSONResponse(
+                            status_code=503,
+                            content={"detail": "Session validation is temporarily unavailable"},
+                            headers={"Retry-After": "5"},
+                        )
                     if invalid_reason:
                         request.session.clear()
                         if request.method in {"GET", "HEAD"}:
@@ -2778,10 +2821,6 @@ def create_app() -> FastAPI:
 
                 SessionLocal = get_sessionmaker()
                 with SessionLocal() as db:  # type: ignore
-                    try:
-                        current_sid = int(request.session.get("subject_id") or 0)
-                    except Exception:
-                        current_sid = 0
                     context.update(_build_home_vat_limit_context(db))
             except SQLAlchemyError as exc:  # type: ignore[misc]
                 context.update(
@@ -2827,7 +2866,7 @@ def create_app() -> FastAPI:
                 "sent_invoice_ids": list(result.get("sent_invoice_ids") or []),
                 "errors": list(result.get("errors") or []),
             }
-        except Exception as exc:
+        except Exception:
             logging.getLogger("fakturek").exception("Recurring job failed")
             return JSONResponse(status_code=500, content={"detail": "Internal job failed"})
 
@@ -2846,7 +2885,7 @@ def create_app() -> FastAPI:
             with SessionLocal() as db:  # type: ignore
                 result = _process_bank_sync(db, request=request)
             return {"status": "ok", **result}
-        except Exception as exc:
+        except Exception:
             logging.getLogger("fakturek").exception("Bank sync job failed")
             return JSONResponse(status_code=500, content={"detail": "Internal job failed"})
 
@@ -2857,12 +2896,12 @@ def create_app() -> FastAPI:
     # CI sandboxes) may not have the DB stack installed. To keep the app importable
     # and the basic healthcheck usable, we load DB-related dependencies lazily.
     try:  # pragma: no cover (covered in integration/DB tests, not unit tests)
-        from sqlalchemy import and_, case, func, or_, select, text
+        from sqlalchemy import case, func, or_, select
         from sqlalchemy.exc import SQLAlchemyError
         from sqlalchemy.orm import Session, selectinload
 
-        from fakturek.db import db_ping, get_db, get_engine, get_sessionmaker
-        from fakturek.registry_sync import sync_contact_from_registry, sync_due_contacts
+        from fakturek.db import db_ping, get_db, get_engine
+        from fakturek.registry_sync import sync_contact_from_registry
         from fakturek.models import (
             ApiToken,
             ApiTokenMonthlyUsage,
@@ -2877,7 +2916,6 @@ def create_app() -> FastAPI:
             InvoiceParty,
             InvoiceSeries,
             IssuerProfile,
-            ImportMap,
             ImportRun,
             Payment,
             RecurringInvoicePlan,
@@ -2949,6 +2987,13 @@ def create_app() -> FastAPI:
         from fakturek.models import UserSubject  # type: ignore
 
         class RBACMiddleware(BaseHTTPMiddleware):
+            def _authorization_unavailable_response(self) -> Response:
+                return JSONResponse(
+                    status_code=503,
+                    content={"detail": "Authorization validation is temporarily unavailable"},
+                    headers={"Retry-After": "5"},
+                )
+
             def _access_denied_response(self, request: Request, *, required: str | None = None) -> Response:
                 accept_header = (request.headers.get("accept") or "").lower()
                 wants_json = "application/json" in accept_header and "text/html" not in accept_header
@@ -2987,6 +3032,7 @@ def create_app() -> FastAPI:
                     "/password/reset",
                     "/setup",
                     "/signup",
+                    "/signup/pending",
                     "/signup/verify",
                     "/signup/resend-verification",
                 }:
@@ -3021,7 +3067,10 @@ def create_app() -> FastAPI:
                 try:
                     db = next(db_gen)
                 except Exception:
-                    return JSONResponse(status_code=503, content={"detail": "Database unavailable"})
+                    logging.getLogger("fakturek").exception(
+                        "Authorization database session could not be opened"
+                    )
+                    return self._authorization_unavailable_response()
                 try:
                     link = db.scalar(
                         select(UserSubject).where(
@@ -3030,7 +3079,10 @@ def create_app() -> FastAPI:
                         )
                     )
                 except Exception:
-                    link = None
+                    logging.getLogger("fakturek").exception(
+                        "Authorization validation failed"
+                    )
+                    return self._authorization_unavailable_response()
                 finally:
                     # Properly close generator/session.
                     try:
@@ -3082,57 +3134,59 @@ def create_app() -> FastAPI:
                 return JSONResponse(status_code=int(exc.status_code), content={"detail": str(exc.detail)})
             return await call_next(request)
 
-    class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-        def _should_prevent_private_cache(self, request: Request) -> bool:
-            if not settings.auth_required:
-                return False
-            path = _request_scope_path(request)
-            if (
-                path.startswith("/static/")
-                or path.startswith("/internal/jobs/")
-                or path.startswith("/api/v1")
-                or path in {"/healthz", "/healthz/db"}
-                or _is_public_invoice_path(path)
-            ):
-                return False
-            return True
+    def _should_prevent_private_cache(request: Request) -> bool:
+        if not settings.auth_required:
+            return False
+        path = _request_scope_path(request)
+        if (
+            path.startswith("/static/")
+            or path.startswith("/internal/jobs/")
+            or path.startswith("/api/v1")
+            or path in {"/healthz", "/healthz/db"}
+            or _is_public_invoice_path(path)
+        ):
+            return False
+        return True
 
+    def _apply_security_headers(request: Request, response: Response) -> Response:
+        headers = response.headers
+        if _should_prevent_private_cache(request):
+            headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            headers["Pragma"] = "no-cache"
+            headers["Expires"] = "0"
+        if "x-content-type-options" not in headers:
+            headers["X-Content-Type-Options"] = "nosniff"
+        if "x-frame-options" not in headers:
+            headers["X-Frame-Options"] = "DENY"
+        if settings.app_env == "prod" and "strict-transport-security" not in headers:
+            headers["Strict-Transport-Security"] = "max-age=63072000"
+        if "referrer-policy" not in headers:
+            headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        if "permissions-policy" not in headers:
+            headers["Permissions-Policy"] = "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+        content_type = str(headers.get("content-type") or "").lower()
+        if "text/html" in content_type and "content-security-policy" not in headers:
+            csp_parts = [
+                "default-src 'self'",
+                "base-uri 'self'",
+                "form-action 'self'",
+                "frame-ancestors 'none'",
+                "img-src 'self' data: blob:",
+                "object-src 'none'",
+                "script-src 'self' 'unsafe-inline'",
+                "style-src 'self' 'unsafe-inline'",
+                "font-src 'self' data:",
+                "connect-src 'self'",
+                "frame-src 'none'",
+            ]
+            if str(request.scope.get("scheme") or "").lower() == "https":
+                csp_parts.append("upgrade-insecure-requests")
+            headers["Content-Security-Policy"] = "; ".join(csp_parts)
+        return response
+
+    class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request: Request, call_next):  # type: ignore[override]
-            response = await call_next(request)
-            headers = response.headers
-            if self._should_prevent_private_cache(request):
-                headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-                headers["Pragma"] = "no-cache"
-                headers["Expires"] = "0"
-            if "x-content-type-options" not in headers:
-                headers["X-Content-Type-Options"] = "nosniff"
-            if "x-frame-options" not in headers:
-                headers["X-Frame-Options"] = "DENY"
-            if settings.app_env == "prod" and "strict-transport-security" not in headers:
-                headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
-            if "referrer-policy" not in headers:
-                headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-            if "permissions-policy" not in headers:
-                headers["Permissions-Policy"] = "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
-            content_type = str(headers.get("content-type") or "").lower()
-            if "text/html" in content_type and "content-security-policy" not in headers:
-                csp_parts = [
-                    "default-src 'self'",
-                    "base-uri 'self'",
-                    "form-action 'self'",
-                    "frame-ancestors 'none'",
-                    "img-src 'self' data: blob:",
-                    "object-src 'none'",
-                    "script-src 'self' 'unsafe-inline'",
-                    "style-src 'self' 'unsafe-inline'",
-                    "font-src 'self' data:",
-                    "connect-src 'self'",
-                    "frame-src 'none'",
-                ]
-                if str(request.url.scheme or "").lower() == "https":
-                    csp_parts.append("upgrade-insecure-requests")
-                headers["Content-Security-Policy"] = "; ".join(csp_parts)
-            return response
+            return _apply_security_headers(request, await call_next(request))
 
     class RequestBodyLimitMiddleware:
         def __init__(self, app, max_body_bytes: int):
@@ -3281,7 +3335,6 @@ def create_app() -> FastAPI:
         max_age=60 * 60 * 24 * 14,
         domain=session_cookie_domain,
     )
-    app.add_middleware(SecurityHeadersMiddleware)
     if settings.app_env == "prod":
         allowed_hosts = sorted(
             {
@@ -3297,6 +3350,9 @@ def create_app() -> FastAPI:
             allowed_hosts=allowed_hosts,
             www_redirect=False,
         )
+    # Security headers must wrap TrustedHostMiddleware so even rejected Host
+    # headers receive the same browser protections as regular responses.
+    app.add_middleware(SecurityHeadersMiddleware)
 
     # Must be OUTERMOST so it can catch exceptions from everything below.
     # In Starlette/FastAPI, the last added middleware runs first.
@@ -3418,7 +3474,6 @@ def create_app() -> FastAPI:
             from_email=from_email,
             from_name=from_name,
         )
-        subject = "Potvrzení registrace do Fakturku"
         body = "\n".join(
             [
                 "Dobrý den,",
@@ -3475,7 +3530,11 @@ def create_app() -> FastAPI:
             return True, None
         except Exception as exc:
             db.rollback()
-            return False, str(exc) or "Potvrzovací e-mail se nepodařilo odeslat."
+            logging.getLogger("fakturek").error(
+                "Failed to send signup verification email (error_type=%s)",
+                type(exc).__name__,
+            )
+            return False, "Potvrzovací e-mail se teď nepodařilo odeslat."
 
     def _load_signup_verification_payload(token: str) -> dict[str, object]:
         return _signup_verification_serializer().loads(
@@ -3571,7 +3630,11 @@ def create_app() -> FastAPI:
             return True, None
         except Exception as exc:
             db.rollback()
-            return False, str(exc) or "E-mail pro reset hesla se nepodařilo odeslat."
+            logging.getLogger("fakturek").error(
+                "Failed to send password reset email (error_type=%s)",
+                type(exc).__name__,
+            )
+            return False, "E-mail pro reset hesla se teď nepodařilo odeslat."
 
     def _mask_email(value: str | None) -> str:
         raw = str(value or "").strip()
@@ -3724,8 +3787,9 @@ def create_app() -> FastAPI:
 
             if not token:
                 return _render_reset_error("Odkaz pro reset hesla je neplatný.", status_code=400)
-            if len(new_password) < 8:
-                return _render_reset_error("Nové heslo musí mít alespoň 8 znaků.", status_code=400)
+            password_error = new_password_length_error(new_password)
+            if password_error:
+                return _render_reset_error(password_error, status_code=400)
             if new_password != new_password2:
                 return _render_reset_error("Nová hesla se neshodují.", status_code=400)
 
@@ -3767,12 +3831,14 @@ def create_app() -> FastAPI:
                     data={"email": email},
                 )
                 db.commit()
-            except SQLAlchemyError as exc:  # type: ignore[misc]
+            except SQLAlchemyError:  # type: ignore[misc]
                 db.rollback()
-                return _render_reset_error(f"Heslo se nepodařilo uložit: {exc}", status_code=500)
+                logging.getLogger("fakturek").exception("Failed to persist password reset")
+                return _render_reset_error("Heslo se teď nepodařilo uložit. Zkus to prosím později.", status_code=500)
 
             return RedirectResponse(url="/login?reset=1", status_code=303)
 
+        _auth_email_rate_limit_or_429(request)
         email = str(form.get("email") or "").strip().lower()
         info = "Pokud u nás tenhle e-mail existuje, poslali jsme na něj odkaz pro nastavení nového hesla."
 
@@ -3803,7 +3869,7 @@ def create_app() -> FastAPI:
 
         sent, error = _send_password_reset_email(db, request=request, user=user)
         if not sent:
-            return _render_request(error=error or "Reset hesla se teď nepodařilo odeslat.", status_code=503)
+            logging.getLogger("fakturek").warning("Password reset email was not sent: %s", error or "unknown error")
         return _render_request()
 
     @app.get("/logout", response_class=HTMLResponse)
@@ -3948,7 +4014,7 @@ def create_app() -> FastAPI:
                 user = db.scalar(
                     select(User).where(or_(User.username == identifier, User.email == identifier))
                 )
-            except SQLAlchemyError as exc:  # type: ignore[misc]
+            except SQLAlchemyError:  # type: ignore[misc]
                 return _login_page_context(
                     request=request,
                     next_url=next_url,
@@ -3957,38 +4023,13 @@ def create_app() -> FastAPI:
                     status_code=503,
                 )
 
-            now_utc = utc_now()
-            if user is not None:
-                locked_until = as_utc_aware(getattr(user, "failed_login_locked_until", None))
-                if locked_until is not None and locked_until > now_utc:
-                    return _login_page_context(
-                        request=request,
-                        next_url=next_url,
-                        prefill=prefill,
-                        error="Kvůli opakovaným neúspěšným pokusům je přihlášení dočasně zablokované. Zkus to přibližně za hodinu.",
-                        status_code=423,
-                    )
-
-            if user is None or not verify_password(password, user.password_hash):
-                if user is not None:
-                    try:
-                        attempts = int(getattr(user, "failed_login_count", 0) or 0) + 1
-                        user.failed_login_count = attempts
-                        if attempts >= LOGIN_FAILURE_LOCK_THRESHOLD:
-                            user.failed_login_locked_until = now_utc + timedelta(seconds=LOGIN_FAILURE_LOCK_SECONDS)
-                        db.add(user)
-                        db.commit()
-                    except SQLAlchemyError:
-                        db.rollback()
+            password_valid = verify_password(password, str(user.password_hash or "") if user is not None else "")
+            if user is None or not password_valid:
                 return _login_page_context(
                     request=request,
                     next_url=next_url,
                     prefill=prefill,
-                    error=(
-                        "Přihlášení je po 3 chybných pokusech na hodinu zablokované."
-                        if user is not None and int(getattr(user, "failed_login_count", 0) or 0) >= LOGIN_FAILURE_LOCK_THRESHOLD
-                        else "Neplatné přihlašovací údaje. Po 3 chybných pokusech se účet na hodinu zamkne."
-                    ),
+                    error="Neplatné přihlašovací údaje.",
                     status_code=401,
                 )
 
@@ -4011,6 +4052,7 @@ def create_app() -> FastAPI:
                 )
 
             # Session: keep only minimal public claims.
+            now_utc = utc_now()
             request.session.clear()
             request.session["user_id"] = int(user.id)
             request.session["username"] = str(user.username)
@@ -4154,7 +4196,6 @@ def create_app() -> FastAPI:
         @app.get("/signup/pending", response_class=HTMLResponse)
         def signup_pending_page(
             request: Request,
-            email: str | None = None,
             sent: bool = False,
             next: str | None = None,
         ):
@@ -4162,7 +4203,7 @@ def create_app() -> FastAPI:
                 return RedirectResponse(url=_safe_next_url(next, "/"), status_code=303)
             return _render_signup_pending_page(
                 request,
-                email=email,
+                email=str(request.session.get("signup_pending_email") or ""),
                 email_sent=bool(sent),
                 next_url=_safe_next_url(next, _signup_created_next_default()),
             )
@@ -4172,6 +4213,7 @@ def create_app() -> FastAPI:
             if not _signup_available():
                 return JSONResponse(status_code=404, content={"detail": "Not found"})
             await _verify_csrf(request)
+            _auth_email_rate_limit_or_429(request)
             form = await _request_form_once(request)
             email = str(form.get("email") or "").strip().lower()
             next_url = _safe_next_url(form.get("next"), "/login")
@@ -4196,17 +4238,25 @@ def create_app() -> FastAPI:
                     info="Jestli ten účet existuje, poslal jsem nový potvrzovací e-mail.",
                 )
             if getattr(user, "email_verified_at", None) is not None and bool(getattr(user, "is_active", False)):
-                return RedirectResponse(url=f"/login?verified=1&next={quote(next_url, safe='')}", status_code=303)
+                return _render_signup_pending_page(
+                    request,
+                    email=email,
+                    email_sent=False,
+                    next_url=next_url,
+                    info="Jestli ten účet existuje, poslal jsem nový potvrzovací e-mail.",
+                )
 
             sent_ok, send_error = _send_signup_verification_email(db, request=request, user=user, next_url=next_url)
+            if not sent_ok:
+                logging.getLogger("fakturek").warning(
+                    "Signup verification email was not sent: %s", send_error or "unknown error"
+                )
             return _render_signup_pending_page(
                 request,
-                email=str(getattr(user, "email", "") or email),
-                email_sent=bool(sent_ok),
+                email=email,
+                email_sent=False,
                 next_url=next_url,
-                error=(None if sent_ok else (send_error or "Potvrzovací e-mail se nepodařilo odeslat.")),
-                info=("Poslal jsem nový potvrzovací e-mail." if sent_ok else None),
-                status_code=(200 if sent_ok else 500),
+                info="Jestli ten účet existuje, poslal jsem nový potvrzovací e-mail.",
             )
 
         @app.get("/signup/verify")
@@ -4260,8 +4310,34 @@ def create_app() -> FastAPI:
                     status_code=404,
                 )
 
-            if getattr(user, "email_verified_at", None) is None:
-                user.email_verified_at = utc_now()
+            if getattr(user, "email_verified_at", None) is not None:
+                if not bool(getattr(user, "is_active", False)):
+                    return _login_page_context(
+                        request=request,
+                        next_url="/login",
+                        error="Účet je deaktivovaný. Aktivační odkaz ho nemůže znovu zapnout.",
+                        status_code=403,
+                    )
+                request.session.clear()
+                verified_next_url = _safe_next_url(
+                    payload.get("next_url"),
+                    _signup_created_next_default(),
+                )
+                verified_next = quote(verified_next_url, safe="")
+                return RedirectResponse(
+                    url=f"{_resolve_app_base_url(request)}/login?verified=1&next={verified_next}",
+                    status_code=303,
+                )
+
+            if getattr(user, "deletion_requested_at", None) is not None:
+                return _login_page_context(
+                    request=request,
+                    next_url="/login",
+                    error="Účet je zrušený a aktivační odkaz už není platný.",
+                    status_code=403,
+                )
+
+            user.email_verified_at = utc_now()
             user.is_active = True
             db.add(user)
             _audit_log(
@@ -4361,8 +4437,9 @@ def create_app() -> FastAPI:
                 return _signup_error("Zadej platný e-mail účtu.")
             if len(email) > 255:
                 return _signup_error("E-mail účtu je příliš dlouhý.")
-            if len(password) < 8:
-                return _signup_error("Heslo musí mít alespoň 8 znaků.")
+            password_error = new_password_length_error(password)
+            if password_error:
+                return _signup_error(password_error)
             if password != password2:
                 return _signup_error("Hesla se neshodují.")
             if not subject_name:
@@ -4457,6 +4534,9 @@ def create_app() -> FastAPI:
                 return _signup_error("Registraci se nepodařilo dokončit. Zkus to prosím znovu.", status_code=500)
             sent_ok, send_error = _send_signup_verification_email(db, request=request, user=user, next_url=next_url)
             if not sent_ok and send_error:
+                request.session["signup_pending_email"] = str(
+                    getattr(user, "email", "") or email
+                )
                 return _render_signup_pending_page(
                     request,
                     email=str(getattr(user, "email", "") or email),
@@ -4467,8 +4547,11 @@ def create_app() -> FastAPI:
                     status_code=500,
                 )
 
+            request.session["signup_pending_email"] = str(
+                getattr(user, "email", "") or email
+            )
             return RedirectResponse(
-                url=f"/signup/pending?sent=1&email={quote(str(getattr(user, 'email', '') or email))}&next={quote(next_url)}",
+                url=f"/signup/pending?sent=1&next={quote(next_url)}",
                 status_code=303,
             )
 
@@ -4498,7 +4581,7 @@ def create_app() -> FastAPI:
                     "auth/login.html",
                     {
                         "db_enabled": False,
-                        "db_error": str(exc),
+                        "db_error": _safe_db_error_message(exc),
                         "next_url": next_url,
                         "prefill": {"identifier": ""},
                         "error": "Databáze není dostupná – nelze vytvořit účet.",
@@ -4518,7 +4601,7 @@ def create_app() -> FastAPI:
                     "next_url": next_url,
                     "setup_requires_token": setup_requires_token,
                     "prefill": {
-                        "token": token or "",
+                        "token": "",
                         "username": "",
                         "email": "",
                     },
@@ -4545,7 +4628,8 @@ def create_app() -> FastAPI:
 
             setup_requires_token = True
 
-            prefill = {"token": token or "", "username": username, "email": email}
+            # Never reflect the setup token back into an HTML response.
+            prefill = {"token": "", "username": username, "email": email}
 
             if not _setup_token_ok(token):
                 return templates.TemplateResponse(
@@ -4571,7 +4655,7 @@ def create_app() -> FastAPI:
                         "next_url": next_url,
                         "setup_requires_token": setup_requires_token,
                         "prefill": prefill,
-                        "error": f"Databáze není dostupná: {exc}",
+                        "error": _safe_operation_error(exc, fallback="Databáze není dostupná."),
                     },
                     status_code=503,
                 )
@@ -4605,7 +4689,8 @@ def create_app() -> FastAPI:
                     status_code=400,
                 )
 
-            if len(password) < 12:
+            password_error = new_password_length_error(password)
+            if password_error:
                 return templates.TemplateResponse(
                     request,
                     "auth/setup.html",
@@ -4613,7 +4698,7 @@ def create_app() -> FastAPI:
                         "next_url": next_url,
                         "setup_requires_token": setup_requires_token,
                         "prefill": prefill,
-                        "error": "Heslo musí mít alespoň 12 znaků.",
+                        "error": password_error,
                     },
                     status_code=400,
                 )
@@ -4673,7 +4758,7 @@ def create_app() -> FastAPI:
                         "next_url": next_url,
                         "setup_requires_token": setup_requires_token,
                         "prefill": prefill,
-                        "error": f"Nepodařilo se vytvořit účet: {exc}",
+                        "error": _safe_operation_error(exc, fallback="Nepodařilo se vytvořit účet."),
                     },
                     status_code=400,
                 )
@@ -4710,7 +4795,7 @@ def create_app() -> FastAPI:
                 "auth/login.html",
                 {
                     "db_enabled": False,
-                    "db_error": _db_import_error,
+                    "db_error": _safe_db_error_message(),
                     "next_url": next_url,
                     "prefill": {"identifier": ""},
                     "error": "Databáze není dostupná – nelze se přihlásit.",
@@ -7410,7 +7495,9 @@ def create_app() -> FastAPI:
                         "payment_sync_last_email_uid": str(getattr(acc, "payment_sync_last_email_uid", "") or "").strip(),
                         "payment_sync_last_checked_at": _format_sync_dt(getattr(acc, "payment_sync_last_checked_at", None)),
                         "payment_sync_last_success_at": _format_sync_dt(getattr(acc, "payment_sync_last_success_at", None)),
-                        "payment_sync_last_error": str(getattr(acc, "payment_sync_last_error", "") or "").strip(),
+                        "payment_sync_last_error": safe_bank_sync_error_message(
+                            getattr(acc, "payment_sync_last_error", "")
+                        ),
                         "has_fio_api_token": bool(str(getattr(acc, "fio_api_token", "") or "").strip()),
                         "invoice_count": int(
                             db.scalar(select(func.count(Invoice.id)).where(Invoice.bank_account_id == int(acc.id))) or 0
@@ -8043,8 +8130,12 @@ def create_app() -> FastAPI:
                     since_uid=str(getattr(account, "payment_sync_last_email_uid", "") or "").strip() or None,
                 )
             except BankSyncError as exc:
-                account.payment_sync_last_error = str(exc)
-                result["errors"].append(str(exc))
+                logging.getLogger("fakturek").exception(
+                    "IMAP bank sync failed for bank account %s",
+                    getattr(account, "id", "?"),
+                )
+                account.payment_sync_last_error = safe_bank_sync_error_message(exc)
+                result["errors"].append(account.payment_sync_last_error)
                 db.add(account)
                 return result
 
@@ -8221,8 +8312,12 @@ def create_app() -> FastAPI:
                         )
                         time.sleep(5)
             except BankSyncError as exc:
-                account.payment_sync_last_error = str(exc)
-                result["errors"].append(str(exc))
+                logging.getLogger("fakturek").exception(
+                    "Fio bank sync failed for bank account %s",
+                    getattr(account, "id", "?"),
+                )
+                account.payment_sync_last_error = safe_bank_sync_error_message(exc)
+                result["errors"].append(account.payment_sync_last_error)
                 if auto_pair:
                     result["matched"] = int(result["matched"]) + _retry_existing_unmatched_bank_transactions(
                         db,
@@ -9267,7 +9362,11 @@ def create_app() -> FastAPI:
                         "status": str(getattr(email_row, "status", "") or ""),
                         "sent_at": _iso_to_export_str(getattr(email_row, "sent_at", None)),
                         "message_id": str(getattr(email_row, "message_id", "") or ""),
-                        "error_message": str(getattr(email_row, "error_message", "") or ""),
+                        "error_message": (
+                            "E-mail se nepodařilo odeslat."
+                            if str(getattr(email_row, "error_message", "") or "").strip()
+                            else ""
+                        ),
                         "created_at": _iso_to_export_str(getattr(email_row, "created_at", None)),
                         "updated_at": _iso_to_export_str(getattr(email_row, "updated_at", None)),
                     }
@@ -10066,8 +10165,12 @@ def create_app() -> FastAPI:
                 return True, ""
             except Exception as exc:
                 email_row.status = "error"
-                email_row.error_message = str(exc)[:5000]
-                return False, str(exc)
+                logging.getLogger("fakturek").error(
+                    "Automatic invoice email failed (error_type=%s)",
+                    type(exc).__name__,
+                )
+                email_row.error_message = "E-mail se nepodařilo odeslat."
+                return False, "E-mail se nepodařilo odeslat."
 
         def _normalize_ico_value(value: str | None) -> str:
             return re.sub(r"\D+", "", str(value or "").strip())
@@ -10776,7 +10879,11 @@ def create_app() -> FastAPI:
                 send_via_smtp(smtp_cfg, msg)
                 return True, ""
             except Exception as exc:
-                return False, str(exc)
+                logging.getLogger("fakturek").error(
+                    "Account deletion notification failed (error_type=%s)",
+                    type(exc).__name__,
+                )
+                return False, "Notifikaci se nepodařilo odeslat."
 
         def _account_delete_confirmation_phrase(request: Request) -> str:
             return "DELETE ACCOUNT" if _normalize_ui_language(request.session.get("ui_language")) == "en" else "SMAZAT ÚČET"
@@ -10895,7 +11002,10 @@ def create_app() -> FastAPI:
                 db.commit()
             except SQLAlchemyError as exc:  # type: ignore[misc]
                 db.rollback()
-                return _render_error(f"Zrušení účtu se nepodařilo uložit: {exc}", status_code=500)
+                return _render_error(
+                    _safe_operation_error(exc, fallback="Zrušení účtu se nepodařilo uložit."),
+                    status_code=500,
+                )
 
             _send_account_deletion_notification(
                 request,
@@ -10974,13 +11084,14 @@ def create_app() -> FastAPI:
                     **settings_admin_context,
                 )
 
-            if len(new_password) < 8:
+            password_error = new_password_length_error(new_password)
+            if password_error:
                 return _render_settings_page(
                     request,
                     issuer=issuer,
                     issuer_source=issuer_source,
                     current_user=current_user,
-                    error="Nové heslo musí mít alespoň 8 znaků.",
+                    error=password_error,
                     status_code=400,
                     bank_accounts=bank_accounts,
                     account_prefill=_blank_account_prefill(
@@ -11021,7 +11132,7 @@ def create_app() -> FastAPI:
                     issuer=issuer,
                     issuer_source=issuer_source,
                     current_user=current_user,
-                    error=f"Nepodařilo se uložit nové heslo: {exc}",
+                    error=_safe_operation_error(exc, fallback="Nepodařilo se uložit nové heslo."),
                     status_code=500,
                     bank_accounts=bank_accounts,
                     account_prefill=_blank_account_prefill(
@@ -11057,7 +11168,7 @@ def create_app() -> FastAPI:
                     issuer=issuer,
                     issuer_source=issuer_source,
                     current_user=_current_user_settings_view(db, request),
-                    error=f"Nepodařilo se uložit platnost přihlášení: {exc}",
+                    error=_safe_operation_error(exc, fallback="Nepodařilo se uložit platnost přihlášení."),
                     status_code=500,
                     bank_accounts=_bank_accounts_view_rows(db, subject_id=current_sid),
                     account_prefill=_blank_account_prefill(
@@ -11103,7 +11214,7 @@ def create_app() -> FastAPI:
                     issuer=issuer,
                     issuer_source=issuer_source,
                     current_user=current_user,
-                    error=f"Nepodařilo se uložit vzhled: {exc}",
+                    error=_safe_operation_error(exc, fallback="Nepodařilo se uložit vzhled."),
                     status_code=500,
                     bank_accounts=bank_accounts,
                     account_prefill=_blank_account_prefill(
@@ -11152,7 +11263,7 @@ def create_app() -> FastAPI:
                     issuer=issuer,
                     issuer_source=issuer_source,
                     current_user=_current_user_settings_view(db, request),
-                    error=f"Nepodařilo se uložit jazyk: {exc}",
+                    error=_safe_operation_error(exc, fallback="Nepodařilo se uložit jazyk."),
                     status_code=500,
                     bank_accounts=bank_accounts,
                     account_prefill=_blank_account_prefill(
@@ -11284,7 +11395,7 @@ def create_app() -> FastAPI:
                     issuer=issuer,
                     issuer_source=issuer_source,
                     current_user=current_user,
-                    error=f"Nepodařilo se vytvořit API klíč: {exc}",
+                    error=_safe_operation_error(exc, fallback="Nepodařilo se vytvořit API klíč."),
                     status_code=400,
                     bank_accounts=bank_accounts,
                     api_tokens=existing_tokens,
@@ -11304,7 +11415,7 @@ def create_app() -> FastAPI:
                     issuer=issuer,
                     issuer_source=issuer_source,
                     current_user=current_user,
-                    error=f"Nepodařilo se vytvořit API klíč: {exc}",
+                    error=_safe_operation_error(exc, fallback="Nepodařilo se vytvořit API klíč."),
                     status_code=500,
                     bank_accounts=bank_accounts,
                     api_tokens=existing_tokens,
@@ -11393,7 +11504,7 @@ def create_app() -> FastAPI:
                     issuer=issuer,
                     issuer_source=issuer_source,
                     current_user=current_user,
-                    error=f"Nepodařilo se API klíč zneplatnit: {exc}",
+                    error=_safe_operation_error(exc, fallback="Nepodařilo se API klíč zneplatnit."),
                     status_code=500,
                     bank_accounts=bank_accounts,
                     api_tokens=existing_tokens,
@@ -11586,7 +11697,7 @@ def create_app() -> FastAPI:
                     request,
                     issuer={**issuer, "bank_account": ""},
                     issuer_source="form",
-                    error=f"Nepodařilo se uložit nastavení: {exc}",
+                    error=_safe_operation_error(exc, fallback="Nepodařilo se uložit nastavení."),
                     status_code=500,
                     current_user=current_user,
                     bank_accounts=_bank_accounts_view_rows(db, subject_id=_current_subject_id()),
@@ -11718,7 +11829,7 @@ def create_app() -> FastAPI:
                     request,
                     issuer=issuer,
                     issuer_source=issuer_source,
-                    error=f"Nepodařilo se přidat účet: {exc}",
+                    error=_safe_operation_error(exc, fallback="Nepodařilo se přidat účet."),
                     status_code=500,
                     bank_accounts=_bank_accounts_view_rows(db, subject_id=sid),
                     account_prefill=prefill,
@@ -11911,7 +12022,7 @@ def create_app() -> FastAPI:
                     request,
                     issuer=issuer,
                     issuer_source=issuer_source,
-                    error=f"Nepodařilo se uložit účet: {exc}",
+                    error=_safe_operation_error(exc, fallback="Nepodařilo se uložit účet."),
                     status_code=500,
                     bank_accounts=_bank_accounts_view_rows(db, subject_id=sid),
                     account_prefill=prefill,
@@ -11945,7 +12056,7 @@ def create_app() -> FastAPI:
             except SQLAlchemyError as exc:
                 db.rollback()
                 return RedirectResponse(
-                    url=f"/settings?error={quote(f'Nepodařilo se spustit párování: {exc}', safe='')}#account-{account_id}",
+                    url=f"/settings?error={quote(_safe_operation_error(exc, fallback='Nepodařilo se spustit párování.'), safe='')}#account-{account_id}",
                     status_code=303,
                 )
 
@@ -12138,7 +12249,7 @@ def create_app() -> FastAPI:
                     request,
                     issuer=issuer,
                     issuer_source=issuer_source,
-                    error=f"Nepodařilo se vytvořit subjekt: {exc}",
+                    error=_safe_operation_error(exc, fallback="Nepodařilo se vytvořit subjekt."),
                     status_code=500,
                     bank_accounts=_bank_accounts_view_rows(db, subject_id=_current_subject_id()),
                     account_prefill=_blank_account_prefill(country=prefill["country"], is_default=False),
@@ -12173,10 +12284,11 @@ def create_app() -> FastAPI:
             issuer, issuer_source = _load_issuer_for_current_subject(db)
             current_subject = _load_subject_for_current_session(db)
             allowed_roles = _subject_user_role_options(db, user_id=creator_user_id, subject_id=subject_id)
+            temporary_password = str(form.get("password") or "")
             prefill = {
                 "username": (form.get("username") or "").strip(),
                 "email": (form.get("email") or "").strip(),
-                "password": str(form.get("password") or ""),
+                "password": "",
                 "role": ((form.get("role") or "manager").strip().lower() or "manager"),
                 "can_view": bool(form.get("can_view")),
                 "can_edit": bool(form.get("can_edit")),
@@ -12205,8 +12317,12 @@ def create_app() -> FastAPI:
                 return _render_subject_user_error("Uživatelské jméno musí mít alespoň 3 znaky.", status_code=400)
             if not prefill["email"] or not looks_like_email(prefill["email"]):
                 return _render_subject_user_error("Zadej platný e-mail nového účtu.", status_code=400)
-            if len(prefill["password"]) < 8:
-                return _render_subject_user_error("Dočasné heslo musí mít alespoň 8 znaků.", status_code=400)
+            password_error = new_password_length_error(temporary_password)
+            if password_error:
+                return _render_subject_user_error(
+                    password_error.replace("Heslo", "Dočasné heslo", 1),
+                    status_code=400,
+                )
             if str(prefill["role"] or "manager") not in allowed_roles:
                 return _render_subject_user_error("Pro tenhle přístup nemáš oprávnění přiřadit vybranou roli.", status_code=403)
 
@@ -12234,7 +12350,7 @@ def create_app() -> FastAPI:
                 user = User(
                     username=str(prefill["username"]),
                     email=str(prefill["email"]),
-                    password_hash=hash_password(str(prefill["password"])),
+                    password_hash=hash_password(temporary_password),
                     is_active=True,
                     email_verified_at=utc_now(),
                 )
@@ -12257,7 +12373,10 @@ def create_app() -> FastAPI:
                 return _render_subject_user_error(str(exc), status_code=400)
             except SQLAlchemyError as exc:
                 db.rollback()
-                return _render_subject_user_error(f"Nepodařilo se vytvořit uživatelský účet: {exc}", status_code=500)
+                return _render_subject_user_error(
+                    _safe_operation_error(exc, fallback="Nepodařilo se vytvořit uživatelský účet."),
+                    status_code=500,
+                )
 
             _refresh_current_session_access_context(request, db)
             return RedirectResponse(
@@ -12351,7 +12470,10 @@ def create_app() -> FastAPI:
                 db.commit()
             except SQLAlchemyError as exc:
                 db.rollback()
-                return _render_link_existing_error(f"Nepodařilo se přidat existující účet k subjektu: {exc}", status_code=500)
+                return _render_link_existing_error(
+                    _safe_operation_error(exc, fallback="Nepodařilo se přidat existující účet k subjektu."),
+                    status_code=500,
+                )
 
             _refresh_current_session_access_context(request, db)
             return RedirectResponse(
@@ -12458,7 +12580,10 @@ def create_app() -> FastAPI:
                 db.commit()
             except SQLAlchemyError as exc:
                 db.rollback()
-                return _render_update_error(f"Nepodařilo se uložit změny přístupu: {exc}", status_code=500)
+                return _render_update_error(
+                    _safe_operation_error(exc, fallback="Nepodařilo se uložit změny přístupu."),
+                    status_code=500,
+                )
 
             _refresh_current_session_access_context(request, db, preferred_subject_id=preferred_subject_id)
             return RedirectResponse(
@@ -12529,7 +12654,10 @@ def create_app() -> FastAPI:
                 db.commit()
             except SQLAlchemyError as exc:
                 db.rollback()
-                return _render_delete_error(f"Nepodařilo se odebrat přístup: {exc}", status_code=500)
+                return _render_delete_error(
+                    _safe_operation_error(exc, fallback="Nepodařilo se odebrat přístup."),
+                    status_code=500,
+                )
 
             _refresh_current_session_access_context(request, db, preferred_subject_id=preferred_subject_id)
             return RedirectResponse(
@@ -12559,7 +12687,7 @@ def create_app() -> FastAPI:
                     request,
                     issuer=_load_issuer_for_current_subject(db)[0],
                     issuer_source=_load_issuer_for_current_subject(db)[1],
-                    error=f"Nepodařilo se nastavit výchozí účet: {exc}",
+                    error=_safe_operation_error(exc, fallback="Nepodařilo se nastavit výchozí účet."),
                     status_code=500,
                     bank_accounts=[],
                 )
@@ -12599,7 +12727,7 @@ def create_app() -> FastAPI:
                     request,
                     issuer=issuer,
                     issuer_source=issuer_source,
-                    error=f"Nepodařilo se smazat účet: {exc}",
+                    error=_safe_operation_error(exc, fallback="Nepodařilo se smazat účet."),
                     status_code=500,
                     bank_accounts=[
                         {
@@ -12905,13 +13033,19 @@ def create_app() -> FastAPI:
             except SQLAlchemyError as exc:  # type: ignore[misc]
                 db.rollback()
                 return RedirectResponse(
-                    url=_with_query_params(next_url, error=f"Platbu se nepodařilo spárovat: {exc}"),
+                    url=_with_query_params(
+                        next_url,
+                        error=_safe_operation_error(exc, fallback="Platbu se nepodařilo spárovat."),
+                    ),
                     status_code=303,
                 )
             except BankSyncError as exc:
                 db.rollback()
                 return RedirectResponse(
-                    url=_with_query_params(next_url, error=str(exc)),
+                    url=_with_query_params(
+                        next_url,
+                        error=_safe_operation_error(exc, fallback="Platbu se nepodařilo spárovat."),
+                    ),
                     status_code=303,
                 )
 
@@ -12943,7 +13077,7 @@ def create_app() -> FastAPI:
                     "stats.html",
                     {
                         "db_enabled": False,
-                        "db_error": str(exc),
+                        "db_error": _safe_db_error_message(exc),
                     },
                 )
 
@@ -12963,7 +13097,7 @@ def create_app() -> FastAPI:
                 "stats.html",
                 {
                     "db_enabled": False,
-                    "db_error": _db_import_error,
+                    "db_error": _safe_db_error_message(),
                 },
             )
 
@@ -13488,7 +13622,10 @@ def create_app() -> FastAPI:
                 try:
                     zip_bytes = _build_invoice_isdoc_zip_bytes(db, invoices=invoices)
                 except Exception as exc:
-                    return _render_export_error(f"ZIP s ISDOC se nepodařilo vygenerovat: {exc}", status_code=500)
+                    return _render_export_error(
+                        _safe_operation_error(exc, fallback="ZIP s ISDOC se nepodařilo vygenerovat."),
+                        status_code=500,
+                    )
                 return Response(
                     content=zip_bytes,
                     media_type="application/zip",
@@ -13523,7 +13660,10 @@ def create_app() -> FastAPI:
                 try:
                     pdf_bytes = _build_invoice_pdf_merged_bytes(request, db, invoices=invoices)
                 except Exception as exc:
-                    return _render_export_error(f"Sloučené PDF se nepodařilo vygenerovat: {exc}", status_code=500)
+                    return _render_export_error(
+                        _safe_operation_error(exc, fallback="Sloučené PDF se nepodařilo vygenerovat."),
+                        status_code=500,
+                    )
                 return Response(
                     content=pdf_bytes,
                     media_type="application/pdf",
@@ -13534,7 +13674,10 @@ def create_app() -> FastAPI:
                 try:
                     zip_bytes = _build_invoice_pdf_zip_bytes(request, db, invoices=invoices)
                 except Exception as exc:
-                    return _render_export_error(f"ZIP s PDF se nepodařilo vygenerovat: {exc}", status_code=500)
+                    return _render_export_error(
+                        _safe_operation_error(exc, fallback="ZIP s PDF se nepodařilo vygenerovat."),
+                        status_code=500,
+                    )
                 return Response(
                     content=zip_bytes,
                     media_type="application/zip",
@@ -13775,7 +13918,7 @@ def create_app() -> FastAPI:
                         "db_enabled": True,
                         "can_export": _current_request_can_export_subject(db, request=request, subject_id=int(sid)),
                         "notice": None,
-                        "error": f"Nepodařilo se přečíst soubor: {exc}",
+                        "error": _safe_operation_error(exc, fallback="Nepodařilo se přečíst soubor."),
                         "runs": [],
                         "prefill": {"source": source},
                         "export_prefill": _default_invoice_export_prefill(),
@@ -13866,7 +14009,7 @@ def create_app() -> FastAPI:
                         "db_enabled": True,
                         "can_export": _current_request_can_export_subject(db, request=request, subject_id=int(sid)),
                         "notice": None,
-                        "error": f"Nepodařilo se uložit soubor: {exc}",
+                        "error": _safe_operation_error(exc, fallback="Nepodařilo se uložit soubor."),
                         "runs": [],
                         "prefill": {"source": source},
                         "export_prefill": _default_invoice_export_prefill(),
@@ -14075,7 +14218,6 @@ def create_app() -> FastAPI:
         # --- Contacts ----------------------------------------------------
 
         CONTACT_TITLE = "Kontakt"
-        CONTACT_NEW_TITLE = "Nový kontakt"
         CONTACT_EDIT_TITLE = "Upravit kontakt"
 
         INVOICE_TITLE = "Faktura"
@@ -15022,9 +15164,6 @@ def create_app() -> FastAPI:
 
             subject = subject_override or _load_subject_for_current_session(db)
             invoice_language = _normalize_invoice_language(getattr(invoice, "invoice_language", None))
-            invoice_style = _normalize_invoice_style(
-                getattr(invoice, "invoice_style", None) or _default_invoice_style(subject)
-            )
             invoice_i18n = _invoice_texts(invoice_language)
             payment_account = _invoice_bank_account_payload(invoice, subject=subject)
             payment_method, payment_method_label = _effective_invoice_payment_context(
@@ -15589,13 +15728,6 @@ def create_app() -> FastAPI:
                     pdf_bytes = None
 
                 if pdf_bytes is None:
-                    items_total_cents = int(ctx.get("items_total_cents") or 0)
-                    discount_cents = int(ctx.get("discount_cents") or 0)
-                    rounding_adj_cents = int(ctx.get("rounding_adjustment_cents") or 0)
-                    total_cents = int(items_total_cents - discount_cents + rounding_adj_cents)
-                    buyer_dict = dict(ctx.get("buyer") or {})
-                    seller_dict = dict(ctx.get("seller") or {})
-                    items_for_pdf = list(ctx.get("items") or [])
                     pdf_data = _invoice_pdf_data_from_context(invoice=invoice_pdf_obj, ctx=ctx)
                     try:
                         pdf_bytes = render_invoice_pdf_bytes(pdf_data)
@@ -15826,7 +15958,7 @@ def create_app() -> FastAPI:
                     .where(Invoice.contact.has(Contact.subject_id == sid))
                     .options(selectinload(Invoice.contact))
                 )
-            except SQLAlchemyError as exc:  # type: ignore[misc]
+            except SQLAlchemyError:  # type: ignore[misc]
                 return _invoice_pdf_error_response(
                     request,
                     title="PDF faktury",
@@ -15860,7 +15992,7 @@ def create_app() -> FastAPI:
                     .where(InvoiceItem.invoice_id == invoice_id)
                     .order_by(InvoiceItem.sort_order.asc())
                 ).all()
-            except SQLAlchemyError as exc:  # type: ignore[misc]
+            except SQLAlchemyError:  # type: ignore[misc]
                 return _invoice_pdf_error_response(
                     request,
                     title="PDF faktury",
@@ -15869,13 +16001,6 @@ def create_app() -> FastAPI:
                 )
 
             ctx = _build_invoice_print_context(db, invoice=invoice, items=list(items))
-            items_total_cents = int(ctx.get("items_total_cents") or 0)
-            discount_cents = int(ctx.get("discount_cents") or 0)
-            rounding_adj_cents = int(ctx.get("rounding_adjustment_cents") or 0)
-            total_cents = int(items_total_cents - discount_cents + rounding_adj_cents)
-            buyer_dict = dict(ctx.get("buyer") or {})
-            seller_dict = dict(ctx.get("seller") or {})
-
             disp = (
                 content_disposition_attachment(invoice.number)
                 if bool(download)
@@ -16190,7 +16315,7 @@ def create_app() -> FastAPI:
                     public_username=public_username,
                     token=token,
                 )
-            except SQLAlchemyError as exc:  # type: ignore[misc]
+            except SQLAlchemyError:  # type: ignore[misc]
                 return _invoice_pdf_error_response(
                     request,
                     title="PDF faktury",
@@ -16231,7 +16356,7 @@ def create_app() -> FastAPI:
                     .where(InvoiceItem.invoice_id == int(invoice.id))
                     .order_by(InvoiceItem.sort_order.asc())
                 ).all()
-            except SQLAlchemyError as exc:  # type: ignore[misc]
+            except SQLAlchemyError:  # type: ignore[misc]
                 return _invoice_pdf_error_response(
                     request,
                     title="PDF faktury",
@@ -16245,13 +16370,6 @@ def create_app() -> FastAPI:
                 items=list(items),
                 subject_override=subject,
             )
-
-            items_total_cents = int(ctx.get("items_total_cents") or 0)
-            discount_cents = int(ctx.get("discount_cents") or 0)
-            rounding_adj_cents = int(ctx.get("rounding_adjustment_cents") or 0)
-            total_cents = int(items_total_cents - discount_cents + rounding_adj_cents)
-            buyer_dict = dict(ctx.get("buyer") or {})
-            seller_dict = dict(ctx.get("seller") or {})
 
             disp = (
                 content_disposition_attachment(invoice.number)
@@ -16351,7 +16469,7 @@ def create_app() -> FastAPI:
                     db,
                     short_code=short_code,
                 )
-            except SQLAlchemyError as exc:  # type: ignore[misc]
+            except SQLAlchemyError:  # type: ignore[misc]
                 return _invoice_pdf_error_response(
                     request,
                     title="PDF faktury",
@@ -16399,7 +16517,7 @@ def create_app() -> FastAPI:
                     .where(InvoiceItem.invoice_id == int(invoice.id))
                     .order_by(InvoiceItem.sort_order.asc())
                 ).all()
-            except SQLAlchemyError as exc:  # type: ignore[misc]
+            except SQLAlchemyError:  # type: ignore[misc]
                 return _invoice_pdf_error_response(
                     request,
                     title="PDF faktury",
@@ -16413,13 +16531,6 @@ def create_app() -> FastAPI:
                 items=list(items),
                 subject_override=subject,
             )
-
-            items_total_cents = int(ctx.get("items_total_cents") or 0)
-            discount_cents = int(ctx.get("discount_cents") or 0)
-            rounding_adj_cents = int(ctx.get("rounding_adjustment_cents") or 0)
-            total_cents = int(items_total_cents - discount_cents + rounding_adj_cents)
-            buyer_dict = dict(ctx.get("buyer") or {})
-            seller_dict = dict(ctx.get("seller") or {})
 
             disp = (
                 content_disposition_attachment(invoice.number)
@@ -16529,7 +16640,7 @@ def create_app() -> FastAPI:
                     db,
                     short_code=short_code,
                 )
-            except SQLAlchemyError as exc:  # type: ignore[misc]
+            except SQLAlchemyError:  # type: ignore[misc]
                 return _invoice_pdf_error_response(
                     request,
                     title="PDF faktury",
@@ -17934,7 +18045,7 @@ def create_app() -> FastAPI:
                     request=request,
                     db=db,
                     invoice_id=int(source_invoice.id),
-                    error=f"Nepodařilo se fakturu duplikovat: {exc}",
+                    error=_safe_operation_error(exc, fallback="Nepodařilo se fakturu duplikovat."),
                     status_code=500,
                 )
 
@@ -18107,7 +18218,7 @@ def create_app() -> FastAPI:
                     request=request,
                     db=db,
                     invoice_id=int(source_invoice.id),
-                    error=f"Nepodařilo se připravit dobropis: {exc}",
+                    error=_safe_operation_error(exc, fallback="Nepodařilo se připravit dobropis."),
                     status_code=500,
                 )
 
@@ -18184,7 +18295,7 @@ def create_app() -> FastAPI:
                     request=request,
                     db=db,
                     invoice_id=int(invoice_id),
-                    error=f"Nepodařilo se připravit navazující doklad: {exc}",
+                    error=_safe_operation_error(exc, fallback="Nepodařilo se připravit navazující doklad."),
                     status_code=500,
                 )
 
@@ -18254,7 +18365,7 @@ def create_app() -> FastAPI:
                     request=request,
                     db=db,
                     invoice_id=int(invoice_id),
-                    error=f"Nepodařilo se uložit opakování: {exc}",
+                    error=_safe_operation_error(exc, fallback="Nepodařilo se uložit opakování."),
                     status_code=500,
                 )
             return RedirectResponse(url=f"/invoices/{invoice_id}?notice={quote('Opakování uložené.', safe='')}", status_code=303)
@@ -18784,7 +18895,7 @@ def create_app() -> FastAPI:
                     request=request,
                     db=db,
                     invoice_id=int(invoice_id),
-                    error=f"Nepodařilo se zapnout veřejný odkaz: {exc}",
+                    error=_safe_operation_error(exc, fallback="Nepodařilo se zapnout veřejný odkaz."),
                     status_code=500,
                 )
 
@@ -18827,7 +18938,7 @@ def create_app() -> FastAPI:
                     request=request,
                     db=db,
                     invoice_id=int(invoice_id),
-                    error=f"Nepodařilo se vypnout veřejný odkaz: {exc}",
+                    error=_safe_operation_error(exc, fallback="Nepodařilo se vypnout veřejný odkaz."),
                     status_code=500,
                 )
 
@@ -18886,7 +18997,7 @@ def create_app() -> FastAPI:
                     request=request,
                     db=db,
                     invoice_id=int(invoice_id),
-                    error=f"Nepodařilo se obnovit token: {exc}",
+                    error=_safe_operation_error(exc, fallback="Nepodařilo se obnovit token."),
                     status_code=500,
                 )
 
@@ -19068,7 +19179,7 @@ def create_app() -> FastAPI:
                             request=request,
                             db=db,
                             invoice_id=int(invoice_id),
-                            error=f"Nelze načíst položky pro PDF: {exc}",
+                            error=_safe_operation_error(exc, fallback="Nelze načíst položky pro PDF."),
                             prefill_email={
                                 "to_email": to_raw,
                                 "cc_email": cc_raw,
@@ -19081,12 +19192,6 @@ def create_app() -> FastAPI:
                         )
 
                     ctx = _build_invoice_print_context(db, invoice=invoice, items=list(items))
-                    items_total_cents = int(ctx.get("items_total_cents") or 0)
-                    discount_cents = int(ctx.get("discount_cents") or 0)
-                    rounding_adj_cents = int(ctx.get("rounding_adjustment_cents") or 0)
-                    total_cents = int(items_total_cents - discount_cents + rounding_adj_cents)
-                    buyer_dict = dict(ctx.get("buyer") or {})
-                    seller_dict = dict(ctx.get("seller") or {})
 
                     # Prefer HTML → PDF via WeasyPrint; fall back to ReportLab.
                     try:
@@ -19166,11 +19271,12 @@ def create_app() -> FastAPI:
             except Exception as exc:
                 email_row.status = "error"
                 email_row.sent_at = None
-                # Keep the error best-effort and avoid crashing on encoding.
-                try:
-                    email_row.error_message = str(exc)[:5000]
-                except Exception:
-                    email_row.error_message = "Email send failed"
+                logging.getLogger("fakturek").error(
+                    "Invoice email failed for invoice %s (error_type=%s)",
+                    invoice_id,
+                    type(exc).__name__,
+                )
+                email_row.error_message = "E-mail se nepodařilo odeslat."
             finally:
                 db.add(email_row)
                 try:
@@ -19214,7 +19320,7 @@ def create_app() -> FastAPI:
                 request=request,
                 db=db,
                 invoice_id=int(invoice_id),
-                error=f"E-mail se nepodařilo odeslat: {email_row.error_message or 'neznámá chyba'}",
+                error="E-mail se nepodařilo odeslat. Zkontrolujte nastavení SMTP a zkuste to znovu.",
                 prefill_email={
                     "to_email": to_raw,
                     "cc_email": cc_raw,
@@ -19457,12 +19563,15 @@ def create_app() -> FastAPI:
                         ).all()
                     except SQLAlchemyError as exc:  # type: ignore[misc]
                         if quick:
-                            return _redirect_with("error", f"Nelze načíst položky pro PDF: {exc}")
+                            return _redirect_with(
+                                "error",
+                                _safe_operation_error(exc, fallback="Nelze načíst položky pro PDF."),
+                            )
                         return _render_invoice_detail(
                             request=request,
                             db=db,
                             invoice_id=int(invoice_id),
-                            error=f"Nelze načíst položky pro PDF: {exc}",
+                            error=_safe_operation_error(exc, fallback="Nelze načíst položky pro PDF."),
                             prefill_reminder={
                                 "to_email": to_raw,
                                 "cc_email": cc_raw,
@@ -19475,12 +19584,6 @@ def create_app() -> FastAPI:
                         )
 
                     ctx = _build_invoice_print_context(db, invoice=invoice, items=list(items))
-                    items_total_cents = int(ctx.get("items_total_cents") or 0)
-                    discount_cents = int(ctx.get("discount_cents") or 0)
-                    rounding_adj_cents = int(ctx.get("rounding_adjustment_cents") or 0)
-                    total_cents = int(items_total_cents - discount_cents + rounding_adj_cents)
-                    buyer_dict = dict(ctx.get("buyer") or {})
-                    seller_dict = dict(ctx.get("seller") or {})
 
                     # Prefer HTML → PDF via WeasyPrint; fall back to ReportLab.
                     try:
@@ -19562,10 +19665,12 @@ def create_app() -> FastAPI:
             except Exception as exc:
                 email_row.status = "error"
                 email_row.sent_at = None
-                try:
-                    email_row.error_message = str(exc)[:5000]
-                except Exception:
-                    email_row.error_message = "Email send failed"
+                logging.getLogger("fakturek").error(
+                    "Invoice reminder email failed for invoice %s (error_type=%s)",
+                    invoice_id,
+                    type(exc).__name__,
+                )
+                email_row.error_message = "E-mail se nepodařilo odeslat."
             finally:
                 db.add(email_row)
                 try:
@@ -19608,14 +19713,14 @@ def create_app() -> FastAPI:
             if quick:
                 return _redirect_with(
                     "error",
-                    f"Upomínku se nepodařilo odeslat: {email_row.error_message or 'neznámá chyba'}",
+                    "Upomínku se nepodařilo odeslat. Zkontrolujte nastavení SMTP a zkuste to znovu.",
                 )
 
             return _render_invoice_detail(
                 request=request,
                 db=db,
                 invoice_id=int(invoice_id),
-                error=f"Upomínku se nepodařilo odeslat: {email_row.error_message or 'neznámá chyba'}",
+                error="Upomínku se nepodařilo odeslat. Zkontrolujte nastavení SMTP a zkuste to znovu.",
                 prefill_reminder={
                     "to_email": to_raw,
                     "cc_email": cc_raw,
@@ -19734,7 +19839,7 @@ def create_app() -> FastAPI:
                         request=request,
                         db=db,
                         invoice_id=invoice_id,
-                        error=f"Nepodařilo se připravit číselnou řadu: {exc}",
+                        error=_safe_operation_error(exc, fallback="Nepodařilo se připravit číselnou řadu."),
                         status_code=500,
                     )
                 invoice.series_id = int(series.id)
@@ -19769,7 +19874,7 @@ def create_app() -> FastAPI:
                     request=request,
                     db=db,
                     invoice_id=invoice_id,
-                    error=f"Nepodařilo se vygenerovat číslo dokladu: {exc}",
+                    error=_safe_operation_error(exc, fallback="Nepodařilo se vygenerovat číslo dokladu."),
                     status_code=500,
                 )
 
@@ -19826,7 +19931,7 @@ def create_app() -> FastAPI:
                     request=request,
                     db=db,
                     invoice_id=invoice_id,
-                    error=f"Nepodařilo se vystavit doklad: {exc}",
+                    error=_safe_operation_error(exc, fallback="Nepodařilo se vystavit doklad."),
                     status_code=500,
                 )
 
@@ -20097,7 +20202,10 @@ def create_app() -> FastAPI:
             except SQLAlchemyError as exc:  # type: ignore[misc]
                 db.rollback()
                 return RedirectResponse(
-                    url=_with_query_params(next_url, error=f"Hromadnou úpravu se nepodařilo uložit: {exc}"),
+                    url=_with_query_params(
+                        next_url,
+                        error=_safe_operation_error(exc, fallback="Hromadnou úpravu se nepodařilo uložit."),
+                    ),
                     status_code=303,
                 )
 
@@ -20197,7 +20305,7 @@ def create_app() -> FastAPI:
                     .where(Invoice.contact.has(Contact.subject_id == sid))
                     .options(selectinload(Invoice.contact))
                 )
-            except SQLAlchemyError as exc:  # type: ignore[misc]
+            except SQLAlchemyError:  # type: ignore[misc]
                 return _invoice_pdf_error_response(
                     request,
                     title="PDF potvrzení hotovosti",
@@ -20252,7 +20360,7 @@ def create_app() -> FastAPI:
                 return _invoice_pdf_error_response(
                     request,
                     title="PDF potvrzení hotovosti",
-                    message=f"Potvrzení se nepodařilo převést do PDF: {exc}",
+                    message=_safe_operation_error(exc, fallback="Potvrzení se nepodařilo převést do PDF."),
                     invoice_number=invoice.number,
                 )
             disp = (

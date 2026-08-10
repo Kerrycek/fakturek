@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 from typing import Any
+from urllib.parse import urlsplit
 
 try:  # pragma: no cover - optional dependency in some environments
     from cryptography.fernet import Fernet, InvalidToken
@@ -57,6 +58,36 @@ def csv_safe_cell(value: Any) -> str:
     if text.startswith(_CSV_FORMULA_PREFIXES):
         return "'" + text
     return text
+
+
+def validate_outbound_base_url(
+    value: str,
+    *,
+    name: str = "outbound URL",
+    require_https: bool = False,
+) -> str:
+    """Validate an administrator-configured base URL before network access."""
+
+    raw = str(value or "").strip().rstrip("/")
+    if not raw or any(char.isspace() or char == "\\" for char in raw):
+        raise ValueError(f"{name} must be a non-empty HTTP(S) URL")
+
+    try:
+        parsed = urlsplit(raw)
+        # Accessing port also validates malformed values such as :not-a-port.
+        _ = parsed.port
+    except ValueError as exc:
+        raise ValueError(f"{name} is not a valid URL") from exc
+
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError(f"{name} must use HTTP or HTTPS")
+    if require_https and parsed.scheme != "https":
+        raise ValueError(f"{name} must use HTTPS in production")
+    if parsed.username or parsed.password:
+        raise ValueError(f"{name} must not contain credentials")
+    if parsed.query or parsed.fragment:
+        raise ValueError(f"{name} must not contain a query string or fragment")
+    return raw
 
 
 

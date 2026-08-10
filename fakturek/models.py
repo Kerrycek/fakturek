@@ -6,7 +6,6 @@ from decimal import Decimal
 
 import sqlalchemy as sa
 from sqlalchemy import (
-    BigInteger,
     Boolean,
     Date,
     DateTime,

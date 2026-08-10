@@ -49,3 +49,8 @@ An installation may set `FAKTUREK_EXTENSION_MODULE` to an installed Python modul
 `register_fakturek_extension(app, context=...)` hook. The context currently contains the
 application settings, Jinja environment and project root. The core never requires an
 extension, and a clean self-hosted installation runs without one.
+
+Extensions are not sandboxed plugins. They execute with the same operating-system
+permissions and access to runtime secrets as the core application. Operators must only
+configure audited, pinned modules under their control; untrusted extension code is a
+complete application compromise.

@@ -1,7 +1,7 @@
 from __future__ import annotations
 from fakturek.time_utils import utc_now
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import pytest
 from starlette.testclient import TestClient
