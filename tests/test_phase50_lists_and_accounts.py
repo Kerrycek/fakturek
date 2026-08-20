@@ -266,11 +266,14 @@ def test_invoice_can_be_duplicated_into_new_issued_invoice(monkeypatch, tmp_path
 
     from decimal import Decimal
 
-    from fakturek.models import Invoice, InvoiceItem
+    from fakturek.models import Contact, Invoice, InvoiceItem
 
     with SessionLocal() as db:
         source = db.get(Invoice, 233)
         assert source is not None
+        contact = db.get(Contact, 1)
+        assert contact is not None
+        contact.email = "atomas@superparba.eu, andrejkovic@monapro.cz"
         source.notes = "Původní poznámka"
         source.payment_method = "bank_transfer"
         source.bank_account_id = 1
@@ -329,6 +332,8 @@ def test_invoice_can_be_duplicated_into_new_issued_invoice(monkeypatch, tmp_path
     assert "Vystavit nový doklad" in duplicated_edit.text
     assert f'action="/invoices/{duplicated_invoice_id}/edit/issue?duplicated=1&amp;from=2026-0233"' in duplicated_edit.text
     assert f'action="/invoices/{duplicated_invoice_id}/issue"' not in duplicated_edit.text
+    assert 'id="buyer_email" name="buyer_email" type="email" multiple' in duplicated_edit.text
+    assert 'value="atomas@superparba.eu, andrejkovic@monapro.cz"' in duplicated_edit.text
 
     save_copy = client.post(
         f"/invoices/{duplicated_invoice_id}/edit/issue?duplicated=1&from=2026-0233",

@@ -426,7 +426,7 @@
                       </div>
                       <div class="form-field">
                         <label for="buyer_email">E-mail</label>
-                        <input id="buyer_email" name="buyer_email" type="email" value="{{ prefill.buyer_party.email or '' }}" />
+                        <input id="buyer_email" name="buyer_email" type="email" multiple value="{{ prefill.buyer_party.email or '' }}" />
                       </div>
                       <div class="form-field">
                         <label for="buyer_phone">Telefon</label>
@@ -2138,6 +2138,20 @@
           const submitter = event.target instanceof HTMLElement ? event.target.closest('button[name="submit_action"]') : null;
           if (submitter) lastSubmitter = submitter;
         });
+
+        form.addEventListener('invalid', (event) => {
+          const field = event.target;
+          if (!(field instanceof HTMLElement)) return;
+          const dialog = field.closest('dialog');
+          if (dialog && !dialog.open) {
+            if (typeof dialog.showModal === 'function') dialog.showModal();
+            else dialog.setAttribute('open', 'open');
+          }
+          window.requestAnimationFrame(() => {
+            field.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            field.focus({ preventScroll: true });
+          });
+        }, true);
 
         form.addEventListener('submit', async (event) => {
           if (!autosaveEnabled || bypassAutosaveSubmit) return;
