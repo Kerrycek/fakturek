@@ -20412,7 +20412,7 @@ def create_app() -> FastAPI:
                     duplicate_page_subtitle += f" Vychází z dokladu {duplicated_from}."
             duplicate_form_action = f"/invoices/{invoice.id}/edit"
             if duplicated_mode:
-                duplicate_form_action += "?duplicated=1"
+                duplicate_form_action = f"/invoices/{invoice.id}/edit/issue?duplicated=1"
                 if duplicated_from:
                     duplicate_form_action += f"&from={quote(duplicated_from, safe='')}"
 
@@ -20564,6 +20564,8 @@ def create_app() -> FastAPI:
                     "footer_preset_map": INVOICE_FOOTER_PRESET_TEXTS,
                     "back_url": f"/invoices/{invoice.id}",
                     "form_action": duplicate_form_action,
+                    "issue_form_action": f"/invoices/{invoice.id}/edit/issue",
+                    "duplicated_mode": bool(duplicated_mode),
                     "public_url": public_urls["view"] if public_urls else None,
                     "page_title": duplicate_page_title or _invoice_page_title_for_type(document_type, mode="edit"),
                     "page_subtitle": duplicate_page_subtitle or (
@@ -20589,6 +20591,7 @@ def create_app() -> FastAPI:
             )
 
         @app.post("/invoices/{invoice_id}/edit")
+        @app.post("/invoices/{invoice_id}/edit/issue")
         async def invoices_update(invoice_id: int, request: Request, db: Session = Depends(get_db)):
             form = await request.form()
             today = date.today()
@@ -20683,7 +20686,7 @@ def create_app() -> FastAPI:
                     page_subtitle = "Vznikla nová kopie faktury. Zkontroluj údaje, případně je uprav, a pak ji vystav jako nový doklad."
                 if duplicated_from:
                     page_subtitle += f" Vychází z dokladu {duplicated_from}."
-                form_action = f"/invoices/{invoice.id}/edit?duplicated=1"
+                form_action = f"/invoices/{invoice.id}/edit/issue?duplicated=1"
                 if duplicated_from:
                     form_action += f"&from={quote(duplicated_from, safe='')}"
                 return page_title, page_subtitle, "Vystavit nový doklad", form_action
@@ -20811,6 +20814,8 @@ def create_app() -> FastAPI:
                         "footer_preset_map": INVOICE_FOOTER_PRESET_TEXTS,
                         "error": error,
                         "back_url": f"/invoices/{invoice.id}",
+                        "issue_form_action": f"/invoices/{invoice.id}/edit/issue",
+                        "duplicated_mode": bool(duplicated_mode),
                         "page_title": duplicate_page_title or _invoice_page_title_for_type(document_type, mode="edit"),
                         "page_subtitle": duplicate_page_subtitle or (
                             "Nabídku můžeš průběžně ladit, pak z ní uděláš zálohovku nebo ostrou fakturu bez přepisování položek."
@@ -21013,7 +21018,25 @@ def create_app() -> FastAPI:
             if status_key == "draft":
                 invoice.series_id = int(selected_series.id) if selected_series is not None else None
 
-            issue_duplicated_draft = bool(duplicated_mode and status_key == "draft")
+            issue_after_save = bool(
+                status_key == "draft"
+                and (
+                    duplicated_mode
+                    or str(request.url.path or "").rstrip("/").endswith("/edit/issue")
+                )
+            )
+            if issue_after_save and settings.auth_required:
+                user_id = request.session.get("user_id")
+                if not user_id:
+                    return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+                issue_link = db.scalar(
+                    select(UserSubject).where(
+                        UserSubject.user_id == int(user_id),
+                        UserSubject.subject_id == int(sid),
+                    )
+                )
+                if issue_link is None or not bool(getattr(issue_link, "can_issue", False)):
+                    return JSONResponse(status_code=403, content={"detail": "Access denied"})
             previous_contact_id = int(before_state.get("contact_id") or 0)
             selected_contact_id = int(getattr(contact, "id", 0) or 0)
             sync_party_snapshots = status_key == "draft" or selected_contact_id != previous_contact_id
@@ -21057,7 +21080,7 @@ def create_app() -> FastAPI:
 
                 _recalc_invoice_total_cents(db, invoice=invoice)
 
-                if issue_duplicated_draft:
+                if issue_after_save:
                     if selected_series is None:
                         selected_series = default_series
                     if selected_series is None:
@@ -21077,6 +21100,8 @@ def create_app() -> FastAPI:
                     invoice.issued_at = utc_now()
                     invoice.sent_at = None
                     invoice.paid_on = None
+                    if subject is not None:
+                        _maybe_ensure_invoice_public_link(db, invoice=invoice, subject=subject)
 
                 changed_fields: list[str] = []
                 after_state = {
@@ -21105,8 +21130,12 @@ def create_app() -> FastAPI:
                     db,
                     action=(
                         "invoice_duplicate_issued"
-                        if issue_duplicated_draft
-                        else ("invoice_duplicate_updated" if duplicated_mode else "invoice_updated")
+                        if issue_after_save and duplicated_mode
+                        else (
+                            "invoice_issued"
+                            if issue_after_save
+                            else ("invoice_duplicate_updated" if duplicated_mode else "invoice_updated")
+                        )
                     ),
                     entity_type="invoice",
                     entity_id=int(invoice.id),
@@ -21130,7 +21159,7 @@ def create_app() -> FastAPI:
                 db.rollback()
                 return _render_edit_editor(error=str(exc))
 
-            if status_key != "draft" or issue_duplicated_draft:
+            if status_key != "draft" or issue_after_save:
                 _regenerate_invoice_pdf_best_effort(request, db, invoice_id=int(invoice.id), subject_id=int(sid))
 
             return RedirectResponse(url=success_next_url, status_code=303)

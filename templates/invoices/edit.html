@@ -38,13 +38,19 @@
       </form>
     {% endif %}
 
-    {% if invoice.status == 'draft' %}
-      <form method="post" action="/invoices/{{ invoice.id }}/issue" style="display:inline">
-        {{ csrf_input(request)|safe }}
-        <button class="btn primary" type="submit" onclick="return confirm('Vystavit doklad a přidělit finální číslo?')">
+    {% if invoice.status == 'draft' and not duplicated_mode %}
+        <button
+          class="btn primary"
+          type="submit"
+          form="invoice-editor-form"
+          formaction="{{ issue_form_action }}"
+          formmethod="post"
+          name="submit_action"
+          value="issue"
+          onclick="return confirm('Vystavit doklad a přidělit finální číslo?')"
+        >
           {% if (invoice.document_type or 'invoice') == 'quote' %}Vystavit nabídku{% elif (invoice.document_type or 'invoice') == 'credit_note' %}Vystavit dobropis{% elif (invoice.document_type or 'invoice') == 'proforma' %}Vystavit zálohovou fakturu{% else %}Vystavit fakturu{% endif %}
         </button>
-      </form>
 
       <form method="post" action="/invoices/{{ invoice.id }}/delete" style="display:inline">
         {{ csrf_input(request)|safe }}
