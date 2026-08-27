@@ -2051,7 +2051,7 @@
                 {% if footer_text %}
                   <div class="pdf-legal-footer">{{ footer_text }}</div>
                 {% endif %}
-                {% if invoice.status == 'paid' %}
+                {% if invoice.status == 'paid' and (document_type or 'invoice') != 'credit_note' %}
                   <div class="pdf-paid-note">{{ invoice_i18n.paid_notice or 'Tento doklad je již uhrazený. Neplaťte jej prosím znovu.' }}</div>
                 {% endif %}
               </div>
