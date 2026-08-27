@@ -266,11 +266,14 @@ def test_invoice_can_be_duplicated_into_new_issued_invoice(monkeypatch, tmp_path
 
     from decimal import Decimal
 
-    from fakturek.models import Invoice, InvoiceItem
+    from fakturek.models import Contact, Invoice, InvoiceItem
 
     with SessionLocal() as db:
         source = db.get(Invoice, 233)
         assert source is not None
+        contact = db.get(Contact, 1)
+        assert contact is not None
+        contact.email = "atomas@superparba.eu, andrejkovic@monapro.cz"
         source.notes = "Původní poznámka"
         source.payment_method = "bank_transfer"
         source.bank_account_id = 1
@@ -278,16 +281,17 @@ def test_invoice_can_be_duplicated_into_new_issued_invoice(monkeypatch, tmp_path
         source.bank_account_iban = "CZ0420100000002200041594"
         source.bank_account_bic = "FIOBCZPP"
         source.bank_account_country = "CZ"
+        source.total_cents = 4_000_000
         db.add(
             InvoiceItem(
                 invoice_id=233,
                 description="Správa infrastruktury",
-                quantity=Decimal("2.00"),
-                unit_price_cents=35_000,
+                quantity=Decimal("40.00"),
+                unit_price_cents=100_000,
                 vat_rate=Decimal("0.00"),
-                line_net_cents=70_000,
+                line_net_cents=4_000_000,
                 line_vat_cents=0,
-                line_total_cents=70_000,
+                line_total_cents=4_000_000,
                 sort_order=1,
             )
         )
@@ -315,7 +319,7 @@ def test_invoice_can_be_duplicated_into_new_issued_invoice(monkeypatch, tmp_path
         duplicated_items = db.query(InvoiceItem).filter(InvoiceItem.invoice_id == duplicated_invoice_id).all()
         assert len(duplicated_items) == 1
         assert duplicated_items[0].description == "Správa infrastruktury"
-        assert duplicated_items[0].line_total_cents == 70_000
+        assert duplicated_items[0].line_total_cents == 4_000_000
 
     detail_page = client.get("/invoices/233")
     assert detail_page.status_code == 200
@@ -326,9 +330,13 @@ def test_invoice_can_be_duplicated_into_new_issued_invoice(monkeypatch, tmp_path
     assert "Nová zduplikovaná faktura" in duplicated_edit.text
     assert "Vychází z dokladu 2026-0233." in duplicated_edit.text
     assert "Vystavit nový doklad" in duplicated_edit.text
+    assert f'action="/invoices/{duplicated_invoice_id}/edit/issue?duplicated=1&amp;from=2026-0233"' in duplicated_edit.text
+    assert f'action="/invoices/{duplicated_invoice_id}/issue"' not in duplicated_edit.text
+    assert 'id="buyer_email" name="buyer_email" type="email" multiple' in duplicated_edit.text
+    assert 'value="atomas@superparba.eu, andrejkovic@monapro.cz"' in duplicated_edit.text
 
     save_copy = client.post(
-        response.headers["location"],
+        f"/invoices/{duplicated_invoice_id}/edit/issue?duplicated=1&from=2026-0233",
         data={
             "contact_id": "1",
             "issue_date": "2026-03-16",
@@ -341,8 +349,8 @@ def test_invoice_can_be_duplicated_into_new_issued_invoice(monkeypatch, tmp_path
             "rounding_adjustment": "0.00",
             "notes": "Zduplikovaná kopie",
             "item_description": ["Správa infrastruktury"],
-            "item_quantity": ["2"],
-            "item_unit_price": ["610.00"],
+            "item_quantity": ["60"],
+            "item_unit_price": ["1000.00"],
             "item_vat_rate": ["0"],
         },
         follow_redirects=False,
@@ -358,5 +366,11 @@ def test_invoice_can_be_duplicated_into_new_issued_invoice(monkeypatch, tmp_path
         assert duplicated is not None
         assert duplicated.status == "issued"
         assert duplicated.number == "2026-0234"
+        assert duplicated.total_cents == 6_000_000
+
+        duplicated_items = db.query(InvoiceItem).filter(InvoiceItem.invoice_id == duplicated_invoice_id).all()
+        assert len(duplicated_items) == 1
+        assert duplicated_items[0].quantity == Decimal("60.00")
+        assert duplicated_items[0].unit_price_cents == 100_000
 
     _reset_settings_and_db()
