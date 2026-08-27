@@ -353,6 +353,14 @@ def render_invoice_pdf_bytes(data: InvoicePDFData) -> bytes:
         borderPadding=8,
         leading=13,
     )
+    paid_notice_style = ParagraphStyle(
+        "paid_notice",
+        parent=p_style,
+        fontName=bold_font,
+        fontSize=8.8,
+        leading=11,
+        textColor=colors.HexColor("#166534"),
+    )
     footer_style = ParagraphStyle(
         "footer",
         parent=small_style,
@@ -674,6 +682,35 @@ def render_invoice_pdf_bytes(data: InvoicePDFData) -> bytes:
             )
         )
         story.append(note_table)
+
+    if (
+        str(data.status or "").strip().lower() == "paid"
+        and str(data.document_type or "invoice").strip().lower() != "credit_note"
+    ):
+        paid_notice = (
+            "This document has already been paid. Please do not pay it again."
+            if str(data.language or "cs").strip().lower().startswith("en")
+            else "Tento doklad je již uhrazený. Neplaťte jej prosím znovu."
+        )
+        story.append(Spacer(1, 4 * mm))
+        paid_notice_table = Table(
+            [[Paragraph(_norm_text(paid_notice), paid_notice_style)]],
+            colWidths=[178 * mm],
+            hAlign="LEFT",
+        )
+        paid_notice_table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#ecfdf3")),
+                    ("BOX", (0, 0), (-1, -1), 0.7, colors.HexColor("#86efac")),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                    ("TOPPADDING", (0, 0), (-1, -1), 7),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+                ]
+            )
+        )
+        story.append(paid_notice_table)
 
     if data.footer_text:
         story.append(Spacer(1, 6 * mm))
