@@ -38,7 +38,8 @@
       </form>
     {% endif %}
 
-    {% if invoice.status == 'draft' and not duplicated_mode %}
+    {% if invoice.status == 'draft' %}
+      {% if not duplicated_mode and not issue_on_primary_submit %}
         <button
           class="btn primary"
           type="submit"
@@ -51,11 +52,14 @@
         >
           {% if (invoice.document_type or 'invoice') == 'quote' %}Vystavit nabídku{% elif (invoice.document_type or 'invoice') == 'credit_note' %}Vystavit dobropis{% elif (invoice.document_type or 'invoice') == 'proforma' %}Vystavit zálohovou fakturu{% else %}Vystavit fakturu{% endif %}
         </button>
+      {% endif %}
 
-      <form method="post" action="/invoices/{{ invoice.id }}/delete" style="display:inline">
-        {{ csrf_input(request)|safe }}
-        <button class="btn" type="submit" onclick="return confirm('Opravdu smazat tento doklad? Tato akce nejde vrátit zpět.')">Smazat doklad</button>
-      </form>
+      {% if not duplicated_mode %}
+        <form method="post" action="/invoices/{{ invoice.id }}/delete" style="display:inline">
+          {{ csrf_input(request)|safe }}
+          <button class="btn" type="submit" onclick="return confirm('Opravdu smazat tento doklad? Tato akce nejde vrátit zpět.')">Smazat doklad</button>
+        </form>
+      {% endif %}
     {% else %}
       <div class="card" style="margin-top:1rem;">
         <p><strong>Poznámka:</strong> doklad je už vystavený, ale zůstává editovatelný. Každá změna se propíše do historie pod dokladem a PDF se znovu vygeneruje.</p>

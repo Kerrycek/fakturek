@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import io
+import re
 from datetime import date
-from urllib.parse import urlsplit
 from decimal import Decimal
+from urllib.parse import urlsplit
 
 import pytest
 from starlette.testclient import TestClient
 
 sqlalchemy = pytest.importorskip("sqlalchemy")
+pypdf = pytest.importorskip("pypdf")
 
 import fakturek.db as db_module
 from fakturek.db import Base
@@ -174,8 +177,19 @@ def test_credit_note_is_created_from_existing_invoice_with_negative_items(monkey
         assert items[0].unit_price_cents == -6_000
         assert items[0].line_total_cents == -12_000
 
+    edit_page = client.get(f"/invoices/{credit_note_id}/edit")
+    assert edit_page.status_code == 200
+    editor_form = re.search(
+        rf'<form\b[^>]*\baction="/invoices/{credit_note_id}/edit/issue"[^>]*>(.*?)</form>',
+        edit_page.text,
+        re.DOTALL,
+    )
+    assert editor_form is not None
+    assert "Vystavit dobropis" in editor_form.group(1)
+    assert len(re.findall(r"<button[^>]*>\s*Vystavit dobropis\s*</button>", edit_page.text)) == 1
+
     edit_response = client.post(
-        f"/invoices/{credit_note_id}/edit",
+        f"/invoices/{credit_note_id}/edit/issue",
         data={
             "document_type": "credit_note",
             "source_invoice_id": "1",
@@ -201,6 +215,11 @@ def test_credit_note_is_created_from_existing_invoice_with_negative_items(monkey
     assert edit_response.headers["location"] == f"/invoices/{credit_note_id}"
 
     with SessionLocal() as db:
+        credit_note = db.get(Invoice, credit_note_id)
+        assert credit_note is not None
+        assert credit_note.status == "issued"
+        assert credit_note.number == "2026-DOB-0001"
+
         items = db.scalars(
             sqlalchemy.select(InvoiceItem)
             .where(InvoiceItem.invoice_id == credit_note_id)
@@ -210,15 +229,6 @@ def test_credit_note_is_created_from_existing_invoice_with_negative_items(monkey
         assert items[0].unit == "hod"
         assert items[0].unit_price_cents == -6_000
         assert items[0].line_total_cents == -12_000
-
-    issue_response = client.post(f"/invoices/{credit_note_id}/issue", follow_redirects=False)
-    assert issue_response.status_code == 303
-    assert issue_response.headers["location"] == f"/invoices/{credit_note_id}"
-
-    with SessionLocal() as db:
-        credit_note = db.get(Invoice, credit_note_id)
-        assert credit_note is not None
-        assert credit_note.number == "2026-DOB-0001"
 
         series = db.scalar(
             sqlalchemy.select(InvoiceSeries)
@@ -238,6 +248,28 @@ def test_credit_note_is_created_from_existing_invoice_with_negative_items(monkey
     assert credit_note_print.status_code == 200
     assert "Dobropis" in credit_note_print.text
     assert "Navázaný doklad: 2026-0042" in credit_note_print.text
+
+    with SessionLocal() as db:
+        source_invoice = db.get(Invoice, 1)
+        credit_note = db.get(Invoice, credit_note_id)
+        assert source_invoice is not None
+        assert credit_note is not None
+        source_invoice.status = "paid"
+        credit_note.status = "paid"
+        db.commit()
+
+    paid_invoice_pdf = client.get("/invoices/1/pdf")
+    paid_credit_note_pdf = client.get(f"/invoices/{credit_note_id}/pdf")
+    paid_invoice_reader = pypdf.PdfReader(io.BytesIO(paid_invoice_pdf.content))
+    paid_credit_note_reader = pypdf.PdfReader(io.BytesIO(paid_credit_note_pdf.content))
+    paid_invoice_text = "\n".join(
+        page.extract_text() or "" for page in paid_invoice_reader.pages
+    )
+    paid_credit_note_text = "\n".join(
+        page.extract_text() or "" for page in paid_credit_note_reader.pages
+    )
+    assert "Tento doklad je již uhrazený" in paid_invoice_text
+    assert "Tento doklad je již uhrazený" not in paid_credit_note_text
 
     filtered = client.get("/invoices?document_type=credit_note")
     assert filtered.status_code == 200

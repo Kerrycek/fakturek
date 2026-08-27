@@ -15674,7 +15674,7 @@ def create_app() -> FastAPI:
             pdf_generated_at = getattr(invoice, "pdf_generated_at", None)
             if pdf_generated_at is None:
                 return False
-            pdf_template_updated_at = datetime(2026, 7, 6, 23, 30, 0)
+            pdf_template_updated_at = datetime(2026, 8, 27, 14, 42, 0)
             if pdf_generated_at < pdf_template_updated_at:
                 return False
             updated_at = getattr(invoice, "updated_at", None)
@@ -20390,8 +20390,10 @@ def create_app() -> FastAPI:
             if invoice is None:
                 return JSONResponse(status_code=404, content={"detail": "Invoice not found"})
             document_type = _normalize_invoice_document_type(getattr(invoice, "document_type", "invoice"))
+            status_key = str(invoice.status or "").strip().lower()
             duplicated_mode = str(request.query_params.get("duplicated") or "").strip() == "1"
             duplicated_from = str(request.query_params.get("from") or "").strip()
+            issue_on_primary_submit = document_type == "credit_note" and status_key == "draft"
 
             duplicate_page_title = None
             duplicate_page_subtitle = None
@@ -20411,6 +20413,8 @@ def create_app() -> FastAPI:
                 if duplicated_from:
                     duplicate_page_subtitle += f" Vychází z dokladu {duplicated_from}."
             duplicate_form_action = f"/invoices/{invoice.id}/edit"
+            if duplicated_mode or issue_on_primary_submit:
+                duplicate_form_action = f"/invoices/{invoice.id}/edit/issue"
             if duplicated_mode:
                 duplicate_form_action = f"/invoices/{invoice.id}/edit/issue?duplicated=1"
                 if duplicated_from:
@@ -20566,6 +20570,7 @@ def create_app() -> FastAPI:
                     "form_action": duplicate_form_action,
                     "issue_form_action": f"/invoices/{invoice.id}/edit/issue",
                     "duplicated_mode": bool(duplicated_mode),
+                    "issue_on_primary_submit": bool(issue_on_primary_submit),
                     "public_url": public_urls["view"] if public_urls else None,
                     "page_title": duplicate_page_title or _invoice_page_title_for_type(document_type, mode="edit"),
                     "page_subtitle": duplicate_page_subtitle or (
@@ -20585,8 +20590,12 @@ def create_app() -> FastAPI:
                             )
                         )
                     ),
-                    "submit_label": "Vystavit nový doklad" if duplicated_mode else "Uložit změny",
-                    "series_locked": str(invoice.status or "").strip().lower() != "draft",
+                    "submit_label": (
+                        "Vystavit nový doklad"
+                        if duplicated_mode
+                        else ("Vystavit dobropis" if issue_on_primary_submit else "Uložit změny")
+                    ),
+                    "series_locked": status_key != "draft",
                 },
             )
 
@@ -20671,6 +20680,8 @@ def create_app() -> FastAPI:
 
             def _duplicate_edit_context() -> tuple[str | None, str | None, str, str]:
                 if not duplicated_mode:
+                    if document_type == "credit_note" and status_key == "draft":
+                        return None, None, "Vystavit dobropis", f"/invoices/{invoice.id}/edit/issue"
                     return None, None, "Uložit změny", f"/invoices/{invoice.id}/edit"
                 if document_type == "quote":
                     page_title = "Nová zduplikovaná nabídka"
@@ -20816,6 +20827,9 @@ def create_app() -> FastAPI:
                         "back_url": f"/invoices/{invoice.id}",
                         "issue_form_action": f"/invoices/{invoice.id}/edit/issue",
                         "duplicated_mode": bool(duplicated_mode),
+                        "issue_on_primary_submit": bool(
+                            document_type == "credit_note" and status_key == "draft"
+                        ),
                         "page_title": duplicate_page_title or _invoice_page_title_for_type(document_type, mode="edit"),
                         "page_subtitle": duplicate_page_subtitle or (
                             "Nabídku můžeš průběžně ladit, pak z ní uděláš zálohovku nebo ostrou fakturu bez přepisování položek."
