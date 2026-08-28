@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 from datetime import date
 import os
 from pathlib import Path
@@ -9,6 +10,7 @@ import pytest
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 playwright_sync = pytest.importorskip("playwright.sync_api")
+pypdf = pytest.importorskip("pypdf")
 from playwright.sync_api import Error as PlaywrightError
 
 from fakturek.banking import BankAccountPayload, build_payment_qr_codes, format_iban_for_display
@@ -232,6 +234,50 @@ def test_invoice_pdf_payment_layout_has_qr_inside_and_clean_header(tmp_path: Pat
         artifact_root.mkdir(parents=True, exist_ok=True)
         page.locator(".pdf-doc").screenshot(path=str(artifact_root / "invoice-pdf-layout.png"))
         browser.close()
+
+
+def test_multi_page_pdf_keeps_each_item_description_and_metadata_together():
+    html = _render_invoice_pdf_html()
+
+    with playwright_sync.sync_playwright() as p:
+        browser = _launch_chromium_or_skip(p)
+        page = browser.new_page(viewport={"width": 1323, "height": 1870}, device_scale_factor=1)
+        page.set_content(html, wait_until="load", timeout=30_000)
+        page.locator(".pdf-doc").wait_for(state="visible")
+        page.locator(".pdf-items-list").evaluate(
+            """
+            (list) => {
+              const template = list.querySelector('.pdf-item-row');
+              list.replaceChildren();
+              for (let index = 1; index <= 12; index += 1) {
+                const row = template.cloneNode(true);
+                row.querySelector('.pdf-item-title').textContent = `Auditni polozka ${index}`;
+                row.querySelector('.pdf-item-meta').textContent = `DETAIL-${index}`;
+                row.querySelector('.pdf-item-total').textContent = '6 050,00 CZK';
+                list.appendChild(row);
+              }
+            }
+            """
+        )
+        pdf_bytes = page.pdf(format="A4", print_background=True)
+        browser.close()
+
+    reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+    page_texts = [page.extract_text() or "" for page in reader.pages]
+    assert len(page_texts) >= 2
+    for index in range(1, 13):
+        title_pages = [
+            page_no
+            for page_no, text in enumerate(page_texts)
+            if f"Auditni polozka {index}" in text
+        ]
+        detail_pages = [
+            page_no
+            for page_no, text in enumerate(page_texts)
+            if f"DETAIL-{index}" in text
+        ]
+        assert title_pages == detail_pages
+        assert len(title_pages) == 1
 
 
 @pytest.mark.parametrize("invoice_style", ["modern", "classic", "minimal"])

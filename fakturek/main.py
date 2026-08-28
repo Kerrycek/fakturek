@@ -3158,7 +3158,9 @@ def create_app() -> FastAPI:
             headers["X-Content-Type-Options"] = "nosniff"
         if "x-frame-options" not in headers:
             headers["X-Frame-Options"] = "DENY"
-        if settings.app_env == "prod" and "strict-transport-security" not in headers:
+        if (
+            settings.app_env == "prod" or request.url.scheme.lower() == "https"
+        ) and "strict-transport-security" not in headers:
             headers["Strict-Transport-Security"] = "max-age=63072000"
         if "referrer-policy" not in headers:
             headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
