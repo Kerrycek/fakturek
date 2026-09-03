@@ -1256,6 +1256,25 @@ body.tabler-direct .payment-qr-card img {
     min-height: 40px;
   }
 
+  body.tabler-direct .invoice-detail-hero-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: .5rem;
+    width: 100%;
+  }
+
+  body.tabler-direct .invoice-detail-hero-actions > form {
+    display: contents;
+  }
+
+  body.tabler-direct .invoice-detail-hero-actions > .btn,
+  body.tabler-direct .invoice-detail-hero-actions > form .btn,
+  body.tabler-direct .invoice-detail-hero-actions > .invoice-detail-more,
+  body.tabler-direct .invoice-detail-hero-actions > .invoice-detail-more > summary {
+    width: 100%;
+    min-width: 0;
+  }
+
   body.tabler-direct .stack-lg,
   body.tabler-direct .settings-shell {
     gap: 1rem;
@@ -1490,7 +1509,12 @@ body.tabler-direct .payment-qr-card img {
 }
 
 @media (max-width: 640px) {
+  body.tabler-direct .import-source-list {
+    grid-template-columns: 1fr;
+  }
+
   body.tabler-direct .contacts-list-table-wrap,
+  body.tabler-direct .contact-invoices-table-wrap,
   body.tabler-direct .payments-posted-table-wrap,
   body.tabler-direct .invoice-detail-items-table {
     overflow: visible !important;
@@ -1501,6 +1525,7 @@ body.tabler-direct .payment-qr-card img {
   }
 
   body.tabler-direct .contacts-mobile-table tr,
+  body.tabler-direct .contact-invoices-mobile-table tr,
   body.tabler-direct .payments-posted-mobile-table tr,
   body.tabler-direct .invoice-detail-items-mobile-table tr,
   body.tabler-direct .invoice-list-mobile-table tr,
@@ -1511,6 +1536,7 @@ body.tabler-direct .payment-qr-card img {
   }
 
   body.tabler-direct .contacts-mobile-table td,
+  body.tabler-direct .contact-invoices-mobile-table td,
   body.tabler-direct .payments-posted-mobile-table td,
   body.tabler-direct .invoice-detail-items-mobile-table td,
   body.tabler-direct .invoice-list-mobile-table td,
@@ -1522,6 +1548,7 @@ body.tabler-direct .payment-qr-card img {
   }
 
   body.tabler-direct .contacts-mobile-table td:first-child,
+  body.tabler-direct .contact-invoices-mobile-table td:first-child,
   body.tabler-direct .payments-posted-mobile-table td:nth-child(n + 3),
   body.tabler-direct .invoice-detail-items-mobile-table td:first-child,
   body.tabler-direct .admin-users-mobile-table td:first-child,
@@ -1532,6 +1559,7 @@ body.tabler-direct .payment-qr-card img {
   }
 
   body.tabler-direct .contacts-mobile-table td:first-child,
+  body.tabler-direct .contact-invoices-mobile-table td:first-child,
   body.tabler-direct .invoice-detail-items-mobile-table td:first-child,
   body.tabler-direct .admin-users-mobile-table td:first-child {
     padding-bottom: .65rem;
@@ -1617,6 +1645,10 @@ body.tabler-direct .payment-qr-card img {
 }
 
 @media (max-width: 360px) {
+  body.tabler-direct .invoice-detail-hero-actions {
+    grid-template-columns: 1fr;
+  }
+
   body.tabler-direct .settings-section-nav,
   body.tabler-direct .admin-section-nav,
   body.tabler-direct .stats-summary-grid,

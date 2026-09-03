@@ -103,8 +103,8 @@
     </div>
 
     {% if invoices %}
-      <div class="table-wrap">
-        <table class="table">
+      <div class="table-wrap contact-invoices-table-wrap">
+        <table class="table responsive-card-table contact-invoices-mobile-table">
           <thead>
             <tr>
               <th>Číslo</th>
@@ -117,11 +117,11 @@
           <tbody>
             {% for inv in invoices %}
               <tr>
-                <td><a href="/invoices/{{ inv.id }}">{{ inv.number }}</a></td>
-                <td>{{ inv.issue_date }}</td>
-                <td>{{ inv.due_date }}</td>
-                <td>{{ inv.status }}</td>
-                <td>{{ inv.total_cents | money(inv.currency) }}</td>
+                <td data-label="Číslo"><a href="/invoices/{{ inv.id }}">{{ inv.number }}</a></td>
+                <td data-label="Vystaveno">{{ inv.issue_date }}</td>
+                <td data-label="Splatnost">{{ inv.due_date }}</td>
+                <td data-label="Stav">{{ inv.status | invoice_status }}</td>
+                <td data-label="Celkem">{{ inv.total_cents | money(inv.currency) }}</td>
               </tr>
             {% endfor %}
           </tbody>

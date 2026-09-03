@@ -14,6 +14,9 @@ def test_mobile_tables_expose_card_labels():
 
     assert "responsive-card-table contacts-mobile-table" in contacts
     assert 'data-label="E-mail"' in contacts
+    contact_detail = _read("templates/contacts/detail.html")
+    assert "responsive-card-table contact-invoices-mobile-table" in contact_detail
+    assert 'data-label="Splatnost"' in contact_detail
     assert "responsive-card-table payments-posted-table payments-posted-mobile-table" in payments
     assert 'data-label="Uhrazeno"' in payments
     assert "responsive-card-table invoice-detail-items-mobile-table" in invoice_detail
@@ -42,6 +45,8 @@ def test_mobile_controls_and_navigation_are_touch_friendly():
     assert "body.tabler-direct a.btn" in css
     assert "body.tabler-direct button.btn" in css
     assert "min-height: 44px" in css
+    assert ".invoice-detail-hero-actions > form" in css
+    assert ".import-source-list" in css
     assert ".settings-section-nav" in css
     assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in css
     assert "20260903-mobile-workspace" in base
@@ -53,3 +58,4 @@ def test_public_invoice_toolbar_uses_mobile_action_grid():
     assert "body.public-mode .toolbar-actions form.inline-form" in template
     assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in template
     assert "min-height: 2.75rem" in template
+    assert "body.public-mode .totals-row.total .public-copy-button" in template
