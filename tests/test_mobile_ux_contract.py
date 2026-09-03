@@ -56,7 +56,8 @@ def test_mobile_controls_and_navigation_are_touch_friendly():
     app_css = _read("static/app.css")
     assert ".settings-inline-form > select" in app_css
     assert ".stack-lg {\n  display: grid;\n  min-width: 0;" in app_css
-    assert "20260903-mobile-tablet-recheck" in base
+    assert ".stack-lg > *" in app_css
+    assert "20260903-mobile-final-recheck" in base
 
 
 def test_public_invoice_toolbar_uses_mobile_action_grid():

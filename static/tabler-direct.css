@@ -958,6 +958,13 @@ body.tabler-direct .stack-lg {
   min-width: 0;
 }
 
+body.tabler-direct .stack-sm > *,
+body.tabler-direct .stack-md > *,
+body.tabler-direct .stack-lg > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
 body.tabler-direct .payment-copy-item {
   gap: .4rem;
 }

@@ -194,6 +194,13 @@ p {
   min-width: 0;
 }
 
+.stack-sm > *,
+.stack-md > *,
+.stack-lg > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
 .stack-sm {
   gap: 0.65rem;
 }
