@@ -951,7 +951,10 @@ body.tabler-direct main.container-xl {
 body.tabler-direct .fakturek-public-brand,
 body.tabler-direct .fakturek-actions,
 body.tabler-direct .fakturek-subject,
-body.tabler-direct .fakturek-theme-menu {
+body.tabler-direct .fakturek-theme-menu,
+body.tabler-direct .stack-sm,
+body.tabler-direct .stack-md,
+body.tabler-direct .stack-lg {
   min-width: 0;
 }
 
@@ -1068,7 +1071,7 @@ body.tabler-direct .payment-qr-card img {
   }
 }
 
-@media (max-width: 640px) {
+@media (max-width: 900px) {
   body.tabler-direct .table-wrap:has(> .responsive-card-table) {
     overflow: visible !important;
     padding: 0 !important;
@@ -1195,7 +1198,7 @@ body.tabler-direct .payment-qr-card img {
 }
 
 /* Mobile workspace: compact, touch-friendly layouts without desktop-width tables. */
-@media (max-width: 767.98px) {
+@media (max-width: 900px) {
   html {
     scroll-padding-top: 4.25rem;
   }

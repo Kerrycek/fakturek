@@ -52,9 +52,11 @@ def test_mobile_controls_and_navigation_are_touch_friendly():
     assert ".dashboard-client-list .dashboard-info-grid" in css
     assert ".table-wrap:has(> .responsive-card-table)" in css
     assert ".responsive-card-table .admin-json-preview" in css
+    assert "@media (max-width: 900px)" in css
     app_css = _read("static/app.css")
     assert ".settings-inline-form > select" in app_css
-    assert "20260903-mobile-admin-recheck" in base
+    assert ".stack-lg {\n  display: grid;\n  min-width: 0;" in app_css
+    assert "20260903-mobile-tablet-recheck" in base
 
 
 def test_public_invoice_toolbar_uses_mobile_action_grid():

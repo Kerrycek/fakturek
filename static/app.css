@@ -191,6 +191,7 @@ p {
 .stack-md,
 .stack-lg {
   display: grid;
+  min-width: 0;
 }
 
 .stack-sm {
@@ -6560,7 +6561,7 @@ code,
   }
 }
 
-@media (max-width: 640px) {
+@media (max-width: 900px) {
   .table-wrap:has(> .responsive-card-table) {
     overflow: visible;
     padding: 0 !important;
