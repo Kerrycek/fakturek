@@ -34,13 +34,15 @@ def test_invoice_editor_has_real_mobile_item_layout():
 
 def test_mobile_controls_and_navigation_are_touch_friendly():
     css = _read("static/tabler-direct.css")
+    base = _read("templates/base.html")
 
     assert 'input:not([type="checkbox"])' in css
     assert "font-size: 1rem" in css
     assert ".navbar-collapse.show" in css
-    assert "min-height: 2.75rem" in css
+    assert "min-height: 44px" in css
     assert ".settings-section-nav" in css
     assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in css
+    assert "20260903-mobile-workspace" in base
 
 
 def test_public_invoice_toolbar_uses_mobile_action_grid():

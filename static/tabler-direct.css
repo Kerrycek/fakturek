@@ -1231,7 +1231,7 @@ body.tabler-direct .payment-qr-card img {
   body.tabler-direct input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
   body.tabler-direct select,
   body.tabler-direct textarea {
-    min-height: 2.75rem;
+    min-height: 44px;
     font-size: 1rem;
   }
 
@@ -1247,11 +1247,11 @@ body.tabler-direct .payment-qr-card img {
   }
 
   body.tabler-direct .btn {
-    min-height: 2.75rem;
+    min-height: 44px;
   }
 
   body.tabler-direct .btn.small {
-    min-height: 2.5rem;
+    min-height: 40px;
   }
 
   body.tabler-direct .stack-lg,
