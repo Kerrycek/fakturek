@@ -1246,7 +1246,9 @@ body.tabler-direct .payment-qr-card img {
     min-width: 1.25rem;
   }
 
-  body.tabler-direct .btn {
+  body.tabler-direct .btn,
+  body.tabler-direct a.btn,
+  body.tabler-direct button.btn {
     min-height: 44px;
   }
 

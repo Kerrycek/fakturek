@@ -39,6 +39,8 @@ def test_mobile_controls_and_navigation_are_touch_friendly():
     assert 'input:not([type="checkbox"])' in css
     assert "font-size: 1rem" in css
     assert ".navbar-collapse.show" in css
+    assert "body.tabler-direct a.btn" in css
+    assert "body.tabler-direct button.btn" in css
     assert "min-height: 44px" in css
     assert ".settings-section-nav" in css
     assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in css
