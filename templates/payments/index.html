@@ -58,7 +58,7 @@
 
   {% if paid_payment_rows %}
     <div class="table-wrap payments-posted-table-wrap">
-      <table class="table payments-posted-table">
+      <table class="table responsive-card-table payments-posted-table payments-posted-mobile-table">
         <thead>
           <tr>
             <th>Uhrazeno</th>
@@ -71,16 +71,16 @@
         <tbody>
           {% for payment in paid_payment_rows %}
             <tr>
-              <td>{{ payment.paid_on }}</td>
-              <td><strong>{{ payment.amount }}</strong></td>
-              <td>
+              <td data-label="Uhrazeno">{{ payment.paid_on }}</td>
+              <td data-label="Částka"><strong>{{ payment.amount }}</strong></td>
+              <td data-label="Faktura">
                 <a href="/invoices/{{ payment.invoice_id }}">{{ payment.invoice_number }}</a>
                 {% if payment.invoice_status %}
                   <span class="muted">· {{ payment.invoice_status | invoice_status }}</span>
                 {% endif %}
               </td>
-              <td>{{ payment.contact or 'Bez kontaktu' }}</td>
-              <td class="muted payment-note-cell">{{ payment.note or '—' }}</td>
+              <td data-label="Odběratel">{{ payment.contact or 'Bez kontaktu' }}</td>
+              <td class="muted payment-note-cell" data-label="Poznámka">{{ payment.note or '—' }}</td>
             </tr>
           {% endfor %}
         </tbody>

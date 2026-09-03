@@ -1175,3 +1175,455 @@ body.tabler-direct .payment-qr-card img {
     min-width: 920px;
   }
 }
+
+/* Mobile workspace: compact, touch-friendly layouts without desktop-width tables. */
+@media (max-width: 767.98px) {
+  html {
+    scroll-padding-top: 4.25rem;
+  }
+
+  body.tabler-direct .fakturek-topbar {
+    position: sticky;
+    top: 0;
+    z-index: 1050;
+  }
+
+  body.tabler-direct.tabler-horizontal .fakturek-topbar .navbar-toggler,
+  body.tabler-direct .fakturek-icon-btn,
+  body.tabler-direct .fakturek-subject-summary .avatar {
+    width: 2.75rem;
+    height: 2.75rem;
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+  }
+
+  body.tabler-direct.tabler-horizontal .fakturek-navrow .navbar-collapse.show,
+  body.tabler-direct.tabler-horizontal .fakturek-navrow .navbar-collapse.collapsing {
+    position: fixed;
+    top: 3.6rem;
+    left: .65rem;
+    right: .65rem;
+    z-index: 1045;
+    display: block;
+    width: auto;
+    max-height: calc(100dvh - 4.25rem);
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--tblr-border-radius);
+    background: var(--paper);
+    box-shadow: 0 1rem 2.5rem rgba(15, 23, 42, .22);
+  }
+
+  body.tabler-direct.tabler-horizontal .fakturek-navrow .navbar-collapse.collapsing {
+    height: auto !important;
+  }
+
+  body.tabler-direct.tabler-horizontal .fakturek-navrow .navbar {
+    min-height: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  body.tabler-direct.tabler-horizontal .fakturek-navrow .nav-link {
+    min-height: 2.75rem;
+  }
+
+  body.tabler-direct input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  body.tabler-direct select,
+  body.tabler-direct textarea {
+    min-height: 2.75rem;
+    font-size: 1rem;
+  }
+
+  body.tabler-direct textarea {
+    min-height: 7rem;
+  }
+
+  body.tabler-direct input[type="checkbox"],
+  body.tabler-direct input[type="radio"] {
+    width: 1.25rem;
+    height: 1.25rem;
+    min-width: 1.25rem;
+  }
+
+  body.tabler-direct .btn {
+    min-height: 2.75rem;
+  }
+
+  body.tabler-direct .btn.small {
+    min-height: 2.5rem;
+  }
+
+  body.tabler-direct .stack-lg,
+  body.tabler-direct .settings-shell {
+    gap: 1rem;
+  }
+
+  body.tabler-direct .page-header-copy > p:last-child,
+  body.tabler-direct .settings-hero-copy,
+  body.tabler-direct .dashboard-hero-copy {
+    max-width: 42rem;
+  }
+
+  body.tabler-direct .settings-section-nav,
+  body.tabler-direct .admin-section-nav {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: .55rem;
+    padding: .7rem;
+  }
+
+  body.tabler-direct .settings-jump-link {
+    align-content: center;
+    min-height: 3.25rem;
+    padding: .65rem .7rem;
+    border-radius: var(--tblr-border-radius);
+  }
+
+  body.tabler-direct .settings-jump-link span {
+    display: none;
+  }
+
+  body.tabler-direct .stats-summary-grid,
+  body.tabler-direct .admin-stats-dashboard {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: .6rem;
+  }
+
+  body.tabler-direct .stats-summary-card,
+  body.tabler-direct .admin-stat-card {
+    min-height: 0;
+    padding: .75rem;
+  }
+
+  body.tabler-direct .stats-summary-card-period,
+  body.tabler-direct .admin-stat-card-primary {
+    grid-column: 1 / -1;
+  }
+
+  body.tabler-direct .stats-rolling-rows {
+    gap: .5rem;
+  }
+
+  body.tabler-direct .stats-rolling-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: .55rem .7rem;
+    padding: .7rem;
+    border-radius: var(--tblr-border-radius);
+  }
+
+  body.tabler-direct .stats-rolling-month {
+    grid-column: 1 / -1;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: baseline;
+    gap: .5rem;
+  }
+
+  body.tabler-direct .stats-rolling-month span {
+    text-align: right;
+  }
+
+  body.tabler-direct .stats-rolling-metric-card {
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+
+  body.tabler-direct .stats-rolling-track {
+    height: .35rem;
+  }
+
+  body.tabler-direct .invoice-editor-hint {
+    display: none;
+  }
+
+  body.tabler-direct .invoice-items-toolbar {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  body.tabler-direct .invoice-items-toolbar .btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  body.tabler-direct .invoice-items-scroll {
+    overflow: visible;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    scrollbar-gutter: auto;
+    touch-action: auto;
+  }
+
+  body.tabler-direct .invoice-items-scroll::before {
+    display: none;
+  }
+
+  body.tabler-direct .invoice-items-table,
+  body.tabler-direct .invoice-items-table tbody {
+    display: block;
+    width: 100%;
+    min-width: 0 !important;
+  }
+
+  body.tabler-direct .invoice-items-table {
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+
+  body.tabler-direct .invoice-items-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  body.tabler-direct .invoice-items-table tbody {
+    display: grid;
+    gap: .75rem;
+  }
+
+  body.tabler-direct .invoice-item-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: .65rem;
+    padding: .75rem;
+    border: 1px solid var(--border);
+    border-radius: var(--tblr-border-radius);
+    background: var(--paper-muted);
+  }
+
+  body.tabler-direct .invoice-item-row .invoice-item-cell {
+    display: grid;
+    width: auto;
+    min-width: 0;
+    gap: .3rem;
+    padding: 0;
+    text-align: left;
+  }
+
+  body.tabler-direct .invoice-item-row .invoice-item-cell::before {
+    content: attr(data-label);
+    color: var(--text-muted);
+    font-size: .6875rem;
+    font-weight: 700;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+  }
+
+  body.tabler-direct .invoice-item-cell-drag {
+    order: 1;
+    align-items: center;
+    justify-content: start;
+  }
+
+  body.tabler-direct .invoice-item-cell-remove {
+    order: 2;
+    align-items: center;
+    justify-content: end;
+  }
+
+  body.tabler-direct .invoice-item-cell-drag::before,
+  body.tabler-direct .invoice-item-cell-remove::before {
+    display: none;
+  }
+
+  body.tabler-direct .invoice-item-cell-desc {
+    order: 3;
+    grid-column: 1 / -1;
+  }
+
+  body.tabler-direct .invoice-item-cell-qty {
+    order: 4;
+  }
+
+  body.tabler-direct .invoice-item-cell-unit {
+    order: 5;
+  }
+
+  body.tabler-direct .invoice-item-cell-price {
+    order: 6;
+    grid-column: 1 / -1;
+  }
+
+  body.tabler-direct .invoice-item-row:has(.invoice-item-cell-vat) .invoice-item-cell-price {
+    grid-column: auto;
+  }
+
+  body.tabler-direct .invoice-item-cell-vat {
+    order: 7;
+  }
+
+  body.tabler-direct .invoice-item-cell-total {
+    order: 8;
+    grid-column: 1 / -1;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    padding-top: .55rem !important;
+    border-top: 1px solid var(--border);
+  }
+
+  body.tabler-direct .invoice-item-total {
+    min-height: 0;
+    padding: 0;
+    justify-content: flex-end;
+  }
+
+  body.tabler-direct .invoice-row-drag,
+  body.tabler-direct .invoice-row-save-catalog,
+  body.tabler-direct .invoice-row-duplicate,
+  body.tabler-direct .invoice-row-remove {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+  }
+
+  body.tabler-direct .invoice-row-actions {
+    justify-content: flex-end;
+  }
+}
+
+@media (max-width: 640px) {
+  body.tabler-direct .contacts-list-table-wrap,
+  body.tabler-direct .payments-posted-table-wrap,
+  body.tabler-direct .invoice-detail-items-table {
+    overflow: visible !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+
+  body.tabler-direct .contacts-mobile-table tr,
+  body.tabler-direct .payments-posted-mobile-table tr,
+  body.tabler-direct .invoice-detail-items-mobile-table tr,
+  body.tabler-direct .invoice-list-mobile-table tr,
+  body.tabler-direct .admin-users-mobile-table tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0 .8rem;
+  }
+
+  body.tabler-direct .contacts-mobile-table td,
+  body.tabler-direct .payments-posted-mobile-table td,
+  body.tabler-direct .invoice-detail-items-mobile-table td,
+  body.tabler-direct .invoice-list-mobile-table td,
+  body.tabler-direct .admin-users-mobile-table td {
+    width: auto;
+    min-width: 0;
+    grid-template-columns: 1fr;
+    gap: .18rem;
+  }
+
+  body.tabler-direct .contacts-mobile-table td:first-child,
+  body.tabler-direct .payments-posted-mobile-table td:nth-child(n + 3),
+  body.tabler-direct .invoice-detail-items-mobile-table td:first-child,
+  body.tabler-direct .admin-users-mobile-table td:first-child,
+  body.tabler-direct .admin-users-mobile-table td:nth-child(4),
+  body.tabler-direct .admin-users-mobile-table td:nth-child(5),
+  body.tabler-direct .admin-users-mobile-table td:last-child {
+    grid-column: 1 / -1;
+  }
+
+  body.tabler-direct .contacts-mobile-table td:first-child,
+  body.tabler-direct .invoice-detail-items-mobile-table td:first-child,
+  body.tabler-direct .admin-users-mobile-table td:first-child {
+    padding-bottom: .65rem;
+    font-size: 1rem;
+    font-weight: 700;
+  }
+
+  body.tabler-direct .contacts-mobile-table td:nth-child(2),
+  body.tabler-direct .payments-posted-mobile-table td:nth-child(1),
+  body.tabler-direct .invoice-detail-items-mobile-table td:nth-child(2),
+  body.tabler-direct .invoice-list-mobile-table td:nth-child(4) {
+    border-bottom: 0;
+  }
+
+  body.tabler-direct .invoice-detail-items-mobile-table td:last-child {
+    font-weight: 700;
+  }
+
+  body.tabler-direct .invoice-detail-vat-mobile-table tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0 .75rem;
+  }
+
+  body.tabler-direct .invoice-detail-vat-mobile-table td {
+    width: auto;
+    grid-template-columns: 1fr;
+    gap: .18rem;
+  }
+
+  body.tabler-direct .invoice-list-mobile-table tr {
+    position: relative;
+  }
+
+  body.tabler-direct .invoice-list-mobile-table td.selection-cell {
+    position: absolute;
+    top: .7rem;
+    right: .7rem;
+    z-index: 1;
+    display: block;
+    width: auto;
+    padding: 0;
+    border: 0;
+  }
+
+  body.tabler-direct .invoice-list-mobile-table td.selection-cell::before {
+    display: none;
+  }
+
+  body.tabler-direct .invoice-list-mobile-table td:nth-child(2),
+  body.tabler-direct .invoice-list-mobile-table td:nth-child(3),
+  body.tabler-direct .invoice-list-mobile-table td:last-child {
+    grid-column: 1 / -1;
+  }
+
+  body.tabler-direct .invoice-list-mobile-table td:nth-child(2) {
+    padding-right: 2.5rem;
+    font-size: 1rem;
+    font-weight: 700;
+  }
+
+  body.tabler-direct .invoice-list-mobile-table td:last-child {
+    padding-top: .65rem;
+  }
+
+  body.tabler-direct .admin-users-table-wrap {
+    overflow: visible;
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+
+  body.tabler-direct .admin-users-mobile-table .settings-table-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  body.tabler-direct .admin-users-mobile-table .settings-table-actions .btn {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+@media (max-width: 360px) {
+  body.tabler-direct .settings-section-nav,
+  body.tabler-direct .admin-section-nav,
+  body.tabler-direct .stats-summary-grid,
+  body.tabler-direct .admin-stats-dashboard {
+    grid-template-columns: 1fr !important;
+  }
+
+  body.tabler-direct .stats-summary-card-period,
+  body.tabler-direct .admin-stat-card-primary {
+    grid-column: auto;
+  }
+}

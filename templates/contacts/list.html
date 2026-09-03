@@ -49,8 +49,8 @@
     </div>
 
     {% if contacts %}
-      <div class="table-wrap">
-        <table class="table">
+      <div class="table-wrap contacts-list-table-wrap">
+        <table class="table responsive-card-table contacts-mobile-table">
           <thead>
             <tr>
               <th>Jméno</th>
@@ -61,9 +61,9 @@
           <tbody>
             {% for c in contacts %}
               <tr>
-                <td><a href="/contacts/{{ c.id }}">{{ c.name }}</a></td>
-                <td>{{ c.email or "" }}</td>
-                <td>{{ c.phone or "" }}</td>
+                <td data-label="Jméno"><a href="/contacts/{{ c.id }}">{{ c.name }}</a></td>
+                <td data-label="E-mail">{{ c.email or "—" }}</td>
+                <td data-label="Telefon">{{ c.phone or "—" }}</td>
               </tr>
             {% endfor %}
           </tbody>
