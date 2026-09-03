@@ -49,7 +49,8 @@ def test_mobile_controls_and_navigation_are_touch_friendly():
     assert ".import-source-list" in css
     assert ".settings-section-nav" in css
     assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in css
-    assert "20260903-mobile-workspace" in base
+    assert ".dashboard-client-list .dashboard-info-grid" in css
+    assert "20260903-mobile-recheck" in base
 
 
 def test_public_invoice_toolbar_uses_mobile_action_grid():

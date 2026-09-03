@@ -1509,6 +1509,16 @@ body.tabler-direct .payment-qr-card img {
 }
 
 @media (max-width: 640px) {
+  body.tabler-direct .dashboard-client-list .dashboard-info-grid {
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+    min-width: 0;
+  }
+
+  body.tabler-direct .dashboard-client-list .info-pair {
+    min-width: 0;
+  }
+
   body.tabler-direct .import-source-list {
     grid-template-columns: 1fr;
   }
