@@ -1069,6 +1069,14 @@ body.tabler-direct .payment-qr-card img {
 }
 
 @media (max-width: 640px) {
+  body.tabler-direct .table-wrap:has(> .responsive-card-table) {
+    overflow: visible !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+
   body.tabler-direct .invoice-list-table-wrap {
     overflow: visible !important;
     background: transparent !important;
@@ -1119,6 +1127,16 @@ body.tabler-direct .payment-qr-card img {
     font-weight: 600;
     letter-spacing: .08em;
     text-transform: uppercase;
+  }
+
+  body.tabler-direct .responsive-card-table code,
+  body.tabler-direct .responsive-card-table pre,
+  body.tabler-direct .responsive-card-table .admin-json-preview,
+  body.tabler-direct .responsive-card-table .admin-log-preview {
+    max-width: 100%;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 }
 

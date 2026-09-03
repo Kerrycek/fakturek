@@ -6471,6 +6471,21 @@ code,
 }
 
 @media (max-width: 760px) {
+  .settings-inline-form {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+    width: 100%;
+  }
+
+  .settings-inline-form > label,
+  .settings-inline-form > input,
+  .settings-inline-form > select,
+  .settings-inline-form > .btn {
+    width: 100%;
+    min-width: 0;
+  }
+
   .page-header-actions .btn,
   .settings-hero-actions .btn,
   .dashboard-actions .btn,
@@ -6546,6 +6561,14 @@ code,
 }
 
 @media (max-width: 640px) {
+  .table-wrap:has(> .responsive-card-table) {
+    overflow: visible;
+    padding: 0 !important;
+    border: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+
   .invoice-list-table-wrap {
     overflow: visible;
     padding: 0 !important;
@@ -6617,6 +6640,16 @@ code,
     font-weight: 800;
     letter-spacing: 0.08em;
     text-transform: uppercase;
+  }
+
+  .responsive-card-table code,
+  .responsive-card-table pre,
+  .responsive-card-table .admin-json-preview,
+  .responsive-card-table .admin-log-preview {
+    max-width: 100%;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
   .responsive-card-table td.selection-cell {
