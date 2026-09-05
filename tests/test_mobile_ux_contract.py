@@ -61,10 +61,11 @@ def test_mobile_controls_and_navigation_are_touch_friendly():
     assert "20260903-mobile-final2-recheck" in base
 
 
-def test_public_invoice_toolbar_uses_mobile_action_grid():
+def test_public_invoice_keeps_original_mobile_toolbar_layout():
     template = _read("templates/invoices/print.html")
 
-    assert "body.public-mode .toolbar-actions form.inline-form" in template
-    assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in template
-    assert "min-height: 2.75rem" in template
-    assert "body.public-mode .totals-row.total .public-copy-button" in template
+    mobile_styles = template.split("@media (max-width: 920px)", 1)[1]
+    assert "body.public-mode .toolbar-actions {\n          justify-content: flex-start;" in mobile_styles
+    assert "flex: 1 1 auto;" in mobile_styles
+    assert "body.public-mode .toolbar-actions form.inline-form" not in mobile_styles
+    assert "body.public-mode .totals-row.total .public-copy-button" not in mobile_styles

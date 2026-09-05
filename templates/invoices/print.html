@@ -1718,35 +1718,13 @@
           margin-bottom: 0.75rem;
         }
         body.public-mode .toolbar-actions {
-          display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 0.5rem;
-          width: 100%;
-          justify-content: stretch;
-        }
-        body.public-mode .toolbar-actions form.inline-form {
-          display: contents;
+          justify-content: flex-start;
         }
         body.public-mode .toolbar-actions .btn,
         body.public-mode .toolbar-actions button.btn {
-          width: 100%;
-          min-height: 2.75rem;
+          flex: 1 1 auto;
           justify-content: center;
           text-align: center;
-        }
-        body.public-mode .public-theme-toggle {
-          width: 100%;
-          min-height: 2.75rem;
-        }
-        body.public-mode .public-copy-button {
-          width: 2.5rem;
-          height: 2.5rem;
-          min-width: 2.5rem;
-        }
-        body.public-mode .totals-row.total .public-copy-button {
-          width: 2.5rem;
-          height: 2.5rem;
-          min-width: 2.5rem;
         }
         body.public-mode .invoice-paper {
           padding: 1rem;
