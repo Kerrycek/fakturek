@@ -323,7 +323,7 @@
             </div>
           </div>
           <div class="table-wrap">
-            <table class="table">
+            <table class="table responsive-card-table invoice-detail-vat-mobile-table">
               <thead>
                 <tr>
                   <th>Sazba</th>
@@ -335,10 +335,10 @@
               <tbody>
                 {% for row in vat_summary.rows %}
                   <tr>
-                    <td>{{ row.rate }}%</td>
-                    <td>{{ row.net_cents | money(invoice.currency) }}</td>
-                    <td>{{ row.vat_cents | money(invoice.currency) }}</td>
-                    <td>{{ row.gross_cents | money(invoice.currency) }}</td>
+                    <td data-label="Sazba">{{ row.rate }}%</td>
+                    <td data-label="Základ">{{ row.net_cents | money(invoice.currency) }}</td>
+                    <td data-label="DPH">{{ row.vat_cents | money(invoice.currency) }}</td>
+                    <td data-label="Celkem">{{ row.gross_cents | money(invoice.currency) }}</td>
                   </tr>
                 {% endfor %}
               </tbody>
@@ -372,7 +372,7 @@
     </div>
     {% if items %}
       <div class="table-wrap invoice-detail-items-table">
-        <table class="table">
+        <table class="table responsive-card-table invoice-detail-items-mobile-table">
           <thead>
             <tr>
               <th>Popis</th>
@@ -385,11 +385,11 @@
           <tbody>
             {% for it in items %}
               <tr>
-                <td>{{ it.description }}</td>
-                <td>{{ it.quantity }}{% if it.unit %} {{ it.unit }}{% endif %}</td>
-                <td>{{ it.unit_price_cents | money(invoice.currency) }}</td>
-                {% if show_vat %}<td>{{ it.vat_rate }}%</td>{% endif %}
-                <td>{{ it.line_total_cents | money(invoice.currency) }}</td>
+                <td data-label="Popis">{{ it.description }}</td>
+                <td data-label="Množství">{{ it.quantity }}{% if it.unit %} {{ it.unit }}{% endif %}</td>
+                <td data-label="Jedn. cena">{{ it.unit_price_cents | money(invoice.currency) }}</td>
+                {% if show_vat %}<td data-label="DPH">{{ it.vat_rate }}%</td>{% endif %}
+                <td data-label="Celkem">{{ it.line_total_cents | money(invoice.currency) }}</td>
               </tr>
             {% endfor %}
           </tbody>

@@ -10,12 +10,21 @@ sqlalchemy = pytest.importorskip("sqlalchemy")
 import fakturek.db as db_module
 from fakturek.db import Base
 from fakturek.settings import get_settings
+from fakturek.ui_i18n import translate_html_document, translate_ui_text
 
 
 def _reset_settings_and_db() -> None:
     get_settings.cache_clear()
     db_module._engine = None
     db_module._SessionLocal = None
+
+
+def test_stats_short_month_labels_are_distinct_in_english() -> None:
+    assert translate_ui_text("Čvn. 26", "en") == "Jun 26"
+    assert translate_ui_text("Čvc. 26", "en") == "Jul 26"
+    assert translate_ui_text("Součty za rok 2031", "en") == "Totals for 2031"
+    assert translate_ui_text("2031 po měsících", "en") == "2031 by month"
+    assert translate_ui_text("Stavy faktur za rok 2031", "en") == "Invoice statuses for 2031"
 
 
 def test_stats_page_supports_year_filters_and_charts(monkeypatch, tmp_path):
@@ -129,6 +138,36 @@ def test_stats_page_supports_year_filters_and_charts(monkeypatch, tmp_path):
     assert "Zaplaceno" in current_response.text
     assert "200 000,00 CZK" in current_response.text
     assert f"/stats?year={previous_year}" in current_response.text
+    current_month = date.today().month
+    june_year = current_year if current_month >= 6 else previous_year
+    july_year = current_year if current_month >= 7 else previous_year
+    assert f"Čvn. {str(june_year)[-2:]}" in current_response.text
+    assert f"Čvc. {str(july_year)[-2:]}" in current_response.text
+    assert "Čer." not in current_response.text
+
+    english_stats = translate_html_document(current_response.text, "en")
+    assert f"Jun {str(june_year)[-2:]}" in english_stats
+    assert f"Jul {str(july_year)[-2:]}" in english_stats
+    assert "Čvn." not in english_stats
+    assert "Čvc." not in english_stats
+    for month_name in [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ]:
+        assert f">{month_name}<" in english_stats
+    assert f"Invoice statuses for {current_year}" in english_stats
+    assert ">Paid<" in english_stats
+    assert "Stavy faktur za rok" not in english_stats
 
     previous_response = client.get(f"/stats?year={previous_year}")
     assert previous_response.status_code == 200

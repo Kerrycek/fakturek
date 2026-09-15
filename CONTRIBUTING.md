@@ -16,12 +16,16 @@ When dependencies change, regenerate the hashed lock files with
 `pip-tools==7.5.3`:
 
 ```bash
-pip-compile --generate-hashes --strip-extras \
+pip-compile --generate-hashes --no-strip-extras \
   --output-file=requirements.lock requirements.txt
 pip-compile --generate-hashes --allow-unsafe --strip-extras \
   --constraint=requirements.lock \
   --output-file=requirements-dev.lock requirements-dev.txt
 ```
+
+The runtime lock keeps dependency extras because production's installer must be able to
+validate their transitive requirements in `--require-hashes` mode. The development lock
+remains constraints-compatible and is installed after the runtime lock.
 
 Use development-only random values in `.env`, start MariaDB with `docker compose up -d db`,
 then run migrations and the app:

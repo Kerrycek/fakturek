@@ -3158,7 +3158,9 @@ def create_app() -> FastAPI:
             headers["X-Content-Type-Options"] = "nosniff"
         if "x-frame-options" not in headers:
             headers["X-Frame-Options"] = "DENY"
-        if settings.app_env == "prod" and "strict-transport-security" not in headers:
+        if (
+            settings.app_env == "prod" or request.url.scheme.lower() == "https"
+        ) and "strict-transport-security" not in headers:
             headers["Strict-Transport-Security"] = "max-age=63072000"
         if "referrer-policy" not in headers:
             headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
@@ -6239,6 +6241,20 @@ def create_app() -> FastAPI:
             "Listopad",
             "Prosinec",
         ]
+        STATS_MONTH_SHORT_LABELS = [
+            "Led.",
+            "Úno.",
+            "Bře.",
+            "Dub.",
+            "Kvě.",
+            "Čvn.",
+            "Čvc.",
+            "Srp.",
+            "Zář.",
+            "Říj.",
+            "Lis.",
+            "Pro.",
+        ]
 
         def _subject_chart_currency(subject: Subject | None) -> str:
             return str(getattr(subject, "default_currency", None) or "CZK").strip().upper() or "CZK"
@@ -6321,7 +6337,7 @@ def create_app() -> FastAPI:
                     {
                         "month_start": month_start,
                         "label": f"{STATS_MONTH_LABELS[int(month_start.month) - 1]} {int(month_start.year)}",
-                        "short_label": f"{STATS_MONTH_LABELS[int(month_start.month) - 1][:3]}. {str(int(month_start.year))[-2:]}",
+                        "short_label": f"{STATS_MONTH_SHORT_LABELS[int(month_start.month) - 1]} {str(int(month_start.year))[-2:]}",
                         "invoiced_cents": invoiced_cents,
                         "paid_cents": paid_cents,
                         "invoice_count": int(bucket["invoice_count"]),
@@ -6560,7 +6576,7 @@ def create_app() -> FastAPI:
                     {
                         "month_start": month_start,
                         "label": f"{STATS_MONTH_LABELS[int(month_start.month) - 1]} {int(month_start.year)}",
-                        "short_label": f"{STATS_MONTH_LABELS[int(month_start.month) - 1][:3]}. {str(int(month_start.year))[-2:]}",
+                        "short_label": f"{STATS_MONTH_SHORT_LABELS[int(month_start.month) - 1]} {str(int(month_start.year))[-2:]}",
                         "invoiced_cents": int(invoiced_cents),
                         "paid_cents": int(paid_cents),
                         "invoice_count": int(invoice_count),

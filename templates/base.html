@@ -72,8 +72,8 @@
     <link rel="stylesheet" href="/static/vendor/tabler-pro/dist/css/tabler-themes.min.css?v=1.4.0-pro" />
     <link rel="stylesheet" href="/static/vendor/tabler-pro/dist/css/tabler-vendors.min.css?v=1.4.0-pro" />
     <link rel="stylesheet" href="/static/vendor/tabler/icons/tabler-icons.min.css?v=3.44.0" />
-    <link rel="stylesheet" href="/static/app.css?v={{ app_build }}-20260708-mobile-topbar" />
-    <link rel="stylesheet" href="/static/tabler-direct.css?v={{ app_build }}-20260708-mobile-topbar" />
+    <link rel="stylesheet" href="/static/app.css?v={{ app_build }}-20260903-mobile-final2-recheck" />
+    <link rel="stylesheet" href="/static/tabler-direct.css?v={{ app_build }}-20260903-mobile-final2-recheck" />
 
     {% block head_extra %}{% endblock %}
     <script src="/static/vendor/tabler-pro/dist/js/tabler-theme.min.js?v=1.4.0-pro"></script>
@@ -197,7 +197,7 @@
               </form>
             {% else %}
               {% if path not in ['/login', '/signup'] %}
-                {% if signup_enabled %}<a class="btn" href="{{ app_nav_base }}/signup">Založit účet</a>{% endif %}
+                {% if signup_enabled %}<a class="btn d-none d-sm-flex" href="{{ app_nav_base }}/signup">Založit účet</a>{% endif %}
                 <a class="btn btn-primary" href="{{ app_nav_base }}/login">Přihlásit</a>
               {% endif %}
             {% endif %}

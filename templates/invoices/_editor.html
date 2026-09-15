@@ -1,6 +1,6 @@
 {% macro item_row(item, is_vat_payer=False, zero_money_preview="") -%}
   <tr class="invoice-item-row" data-item-row>
-    <td class="invoice-item-cell invoice-item-cell-drag">
+    <td class="invoice-item-cell invoice-item-cell-drag" data-label="Pořadí">
       <button
         type="button"
         class="invoice-row-drag"
@@ -12,7 +12,7 @@
         <span></span><span></span><span></span>
       </button>
     </td>
-    <td class="invoice-item-cell invoice-item-cell-qty">
+    <td class="invoice-item-cell invoice-item-cell-qty" data-label="Počet">
       <input
         name="item_quantity"
         type="number"
@@ -24,7 +24,7 @@
         data-item-quantity
       />
     </td>
-    <td class="invoice-item-cell invoice-item-cell-unit">
+    <td class="invoice-item-cell invoice-item-cell-unit" data-label="MJ">
       <input
         name="item_unit"
         value="{{ item.unit or '' }}"
@@ -34,7 +34,7 @@
         data-item-unit
       />
     </td>
-    <td class="invoice-item-cell invoice-item-cell-desc">
+    <td class="invoice-item-cell invoice-item-cell-desc" data-label="Popis">
       <div class="invoice-item-desc-field">
         <input
           name="item_description"
@@ -46,7 +46,7 @@
         <div class="invoice-item-suggestions" data-item-suggestions hidden></div>
       </div>
     </td>
-    <td class="invoice-item-cell invoice-item-cell-price">
+    <td class="invoice-item-cell invoice-item-cell-price" data-label="Cena za MJ">
       <input
         name="item_unit_price"
         type="number"
@@ -59,7 +59,7 @@
       />
     </td>
     {% if is_vat_payer %}
-      <td class="invoice-item-cell invoice-item-cell-vat">
+      <td class="invoice-item-cell invoice-item-cell-vat" data-label="DPH">
         {% set vat_ns = namespace(is_preset=false) %}
         {% for value, label in (vat_rate_options or []) %}
           {% if (item.vat_rate ~ '') == (value ~ '') %}{% set vat_ns.is_preset = true %}{% endif %}
@@ -90,10 +90,10 @@
         <input type="hidden" name="item_vat_rate" value="0" data-item-vat-rate />
       </td>
     {% endif %}
-    <td class="invoice-item-cell invoice-item-cell-total">
+    <td class="invoice-item-cell invoice-item-cell-total" data-label="Celkem">
       <div class="invoice-item-total" data-item-total>{{ item.total_preview or zero_money_preview }}</div>
     </td>
-    <td class="invoice-item-cell invoice-item-cell-remove">
+    <td class="invoice-item-cell invoice-item-cell-remove" data-label="Akce">
       <div class="invoice-row-actions">
         <button
           type="button"

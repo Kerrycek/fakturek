@@ -737,6 +737,25 @@ def test_rejected_host_still_receives_security_headers(monkeypatch, tmp_path):
     _reset_settings_and_db()
 
 
+def test_https_development_response_receives_hsts(monkeypatch, tmp_path):
+    db_path = tmp_path / "dev-https-headers.sqlite3"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite+pysqlite:///{db_path}")
+    monkeypatch.setenv("APP_ENV", "dev")
+    monkeypatch.setenv("AUTH_REQUIRED", "0")
+    monkeypatch.setenv("CSRF_ENABLED", "1")
+    monkeypatch.setenv("SECRET_KEY", "test-secret")
+    _reset_settings_and_db()
+
+    from fakturek.main import create_app
+
+    client = TestClient(create_app(), base_url="https://testserver")
+    response = client.get("/healthz")
+
+    assert response.status_code == 200
+    assert response.headers["Strict-Transport-Security"] == "max-age=63072000"
+    _reset_settings_and_db()
+
+
 def test_setup_requires_twelve_character_password(monkeypatch, tmp_path):
     db_path = tmp_path / "setup.sqlite3"
     monkeypatch.setenv("DATABASE_URL", f"sqlite+pysqlite:///{db_path}")

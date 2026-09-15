@@ -38,6 +38,7 @@ UI_TRANSLATIONS_EN: dict[str, str] = {
     "Nastavení": "Settings",
     "Nastavení – fakturek": "Settings – fakturek",
     "Nastavení účtu a fakturace": "Account and billing settings",
+    "Přepínání sekcí nastavení": "Switch settings sections",
     "Účet": "Account",
     "profil a heslo": "profile and password",
     "Fakturace": "Billing",
@@ -350,7 +351,11 @@ UI_TRANSLATIONS_EN: dict[str, str] = {
     "Vystavená": "Issued",
     "Odeslaná": "Sent",
     "Stornovaná": "Cancelled",
-    "draft": "draft",
+    "draft": "Draft",
+    "issued": "Issued",
+    "sent": "Sent",
+    "paid": "Paid",
+    "cancelled": "Cancelled",
     "vystavená": "issued",
     "odeslaná": "sent",
     "zaplacená": "paid",
@@ -601,17 +606,21 @@ UI_TRANSLATIONS_EN.update(
         "Součty za rok 2026": "Totals for 2026",
         "Každý řádek ukazuje vyfakturovanou částku celkem v měně CZK.": "Each row shows the total invoiced amount in CZK.",
         "2026 po měsících": "2026 by month",
+        "Leden": "January",
         "Únor": "February",
         "Březen": "March",
+        "Duben": "April",
         "Květen": "May",
         "Červen": "June",
         "Červenec": "July",
+        "Srpen": "August",
         "Září": "September",
         "Říjen": "October",
+        "Listopad": "November",
+        "Prosinec": "December",
         "Úno. 26": "Feb 26",
         "Bře. 26": "Mar 26",
         "Kvě. 26": "May 26",
-        "Čer. 26": "Jun 26",
         "Zář. 25": "Sep 25",
         "Říj. 25": "Oct 25",
 
@@ -812,6 +821,20 @@ def _translate_dynamic_ui_text(normalized: str) -> str | None:
         count = match.group(1)
         noun = "invoice" if count == "1" else "invoices"
         return f"{count} {noun}"
+    match = re.fullmatch(r"(\d+) faktur · (\d+) uhrazeno", normalized)
+    if match:
+        invoice_count, paid_count = match.groups()
+        invoice_noun = "invoice" if invoice_count == "1" else "invoices"
+        return f"{invoice_count} {invoice_noun} · {paid_count} paid"
+    match = re.fullmatch(r"Stavy faktur za rok (\d{4})", normalized)
+    if match:
+        return f"Invoice statuses for {match.group(1)}"
+    match = re.fullmatch(r"Součty za rok (\d{4})", normalized)
+    if match:
+        return f"Totals for {match.group(1)}"
+    match = re.fullmatch(r"(\d{4}) po měsících", normalized)
+    if match:
+        return f"{match.group(1)} by month"
     month_abbr = {
         "Led.": "Jan", "Úno.": "Feb", "Bře.": "Mar", "Dub.": "Apr",
         "Kvě.": "May", "Čvn.": "Jun", "Čvc.": "Jul", "Srp.": "Aug",
