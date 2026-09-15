@@ -66,13 +66,18 @@ def test_phase6_responsive_core_routes_have_no_unintended_horizontal_scroll(
                 ("/invoices/new", "invoice-editor"),
                 ("/settings", "settings"),
             ]
-            for width, height in [(320, 740), (390, 844), (768, 1024)]:
+            for width, height in [(320, 740), (360, 800), (390, 844), (768, 1024)]:
                 context = browser.new_context(viewport={"width": width, "height": height})
                 page = context.new_page()
                 response = page.goto(f"{base_url}/password/reset")
                 assert response is None or response.status < 400
                 page.locator("body").wait_for()
-                assert page.get_by_role("link", name="Přihlásit").is_visible()
+                login_link = page.get_by_role("link", name="Přihlásit", exact=True)
+                assert login_link.is_visible()
+                login_box = login_link.bounding_box()
+                assert login_box is not None
+                assert login_box["x"] >= -1
+                assert login_box["x"] + login_box["width"] <= width + 1
                 _assert_no_document_horizontal_scroll(page)
                 page.screenshot(
                     path=str(artifact_root / f"{width}px-public-password-reset.png"),

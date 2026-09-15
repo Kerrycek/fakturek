@@ -1204,13 +1204,6 @@ body.tabler-direct .payment-qr-card img {
   }
 }
 
-@media (max-width: 399.98px) {
-  /* Keep the primary login action visible when public topbar actions cannot both fit. */
-  body.tabler-direct .fakturek-topbar .fakturek-actions > a.btn:not(.btn-primary) {
-    display: none;
-  }
-}
-
 /* Mobile workspace: compact, touch-friendly layouts without desktop-width tables. */
 @media (max-width: 900px) {
   html {
