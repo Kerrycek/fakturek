@@ -12,6 +12,25 @@ UI_LANGUAGE_OPTIONS: list[tuple[str, str]] = [
 
 _VALID_UI_LANGUAGES = {value for value, _label in UI_LANGUAGE_OPTIONS}
 
+_UI_COUNT_FORMS: dict[str, dict[str, tuple[str, str, str]]] = {
+    "document": {
+        "cs": ("doklad", "doklady", "dokladů"),
+        "en": ("document", "documents", "documents"),
+    },
+    "invoice": {
+        "cs": ("faktura", "faktury", "faktur"),
+        "en": ("invoice", "invoices", "invoices"),
+    },
+    "contact": {
+        "cs": ("kontakt", "kontakty", "kontaktů"),
+        "en": ("contact", "contacts", "contacts"),
+    },
+    "paid_invoice": {
+        "cs": ("uhrazena", "uhrazeny", "uhrazeno"),
+        "en": ("paid", "paid", "paid"),
+    },
+}
+
 
 def normalize_ui_language(value: object | None) -> str:
     normalized = str(value or "cs").strip().lower() or "cs"
@@ -20,6 +39,32 @@ def normalize_ui_language(value: object | None) -> str:
     if normalized.startswith("cs") or normalized.startswith("cz"):
         return "cs"
     return normalized if normalized in _VALID_UI_LANGUAGES else "cs"
+
+
+def format_ui_count(
+    count: object,
+    entity: str,
+    language: object | None = None,
+) -> str:
+    """Format a UI count with the right Czech or English word form."""
+
+    try:
+        normalized_count = int(count or 0)
+    except (TypeError, ValueError, OverflowError):
+        normalized_count = 0
+
+    entity_key = str(entity or "").strip().lower()
+    try:
+        forms = _UI_COUNT_FORMS[entity_key][normalize_ui_language(language)]
+    except KeyError as exc:
+        raise ValueError(f"Unknown UI count entity: {entity_key or '<empty>'}") from exc
+
+    absolute_count = abs(normalized_count)
+    if normalize_ui_language(language) == "cs":
+        form_index = 0 if absolute_count == 1 else 1 if absolute_count in {2, 3, 4} else 2
+    else:
+        form_index = 0 if absolute_count == 1 else 2
+    return f"{normalized_count} {forms[form_index]}"
 
 
 # Runtime translations for the application shell and ordinary app pages.
@@ -695,6 +740,7 @@ UI_TRANSLATIONS_EN.update(
         "Hledat": "Search",
         "Typ": "Type",
         "Jen po splatnosti": "Overdue only",
+        "Zobrazeno": "Shown",
         "Zobrazeno:": "Shown:",
         "z": "of",
         "Vypnuto": "Off",
@@ -779,7 +825,7 @@ def _translate_dynamic_ui_text(normalized: str) -> str | None:
     match = re.fullmatch(r"/ (\d+) měsíců / (\d+) IČO", normalized)
     if match:
         return f"/ {match.group(1)} months / {match.group(2)} company ID"
-    match = re.fullmatch(r"IČO (.+?) · (\d+) dokladů", normalized)
+    match = re.fullmatch(r"IČO (.+?) · (\d+) (?:doklad|doklady|dokladů)", normalized)
     if match:
         count = match.group(2)
         noun = "document" if count == "1" else "documents"
@@ -795,7 +841,7 @@ def _translate_dynamic_ui_text(normalized: str) -> str | None:
         return normalized.replace(", IČO ", ", company ID ")
 
     count_patterns = [
-        (r"(\d+) dokladů", "document", "documents"),
+        (r"(\d+) (?:doklad|doklady|dokladů)", "document", "documents"),
         (r"(\d+) aktivních filtrů", "active filter", "active filters"),
         (r"(\d+) k prověření", "to review", "to review"),
         (r"(\d+) nespárováno", "unmatched", "unmatched"),
@@ -807,7 +853,7 @@ def _translate_dynamic_ui_text(normalized: str) -> str | None:
         (r"(\d+) evidovaných plateb", "recorded payment", "recorded payments"),
         (r"(\d+) použito za 30 dní", "use in 30 days", "uses in 30 days"),
         (r"(\d+) aktivních IČO", "active company ID", "active company IDs"),
-        (r"(\d+) kontaktů", "contact", "contacts"),
+        (r"(\d+) (?:kontakt|kontakty|kontaktů)", "contact", "contacts"),
         (r"(\d+) nových účtů", "new account", "new accounts"),
         (r"(\d+) odesláno/vystaveno", "sent/issued", "sent/issued"),
         (r"(\d+) včetně šablon", "including templates", "including templates"),
@@ -821,12 +867,15 @@ def _translate_dynamic_ui_text(normalized: str) -> str | None:
             noun = singular if count == "1" else plural
             return f"{count} {noun}"
 
-    match = re.fullmatch(r"(\d+) faktur", normalized)
+    match = re.fullmatch(r"(\d+) (?:faktura|faktury|faktur)", normalized)
     if match:
         count = match.group(1)
         noun = "invoice" if count == "1" else "invoices"
         return f"{count} {noun}"
-    match = re.fullmatch(r"(\d+) faktur · (\d+) uhrazeno", normalized)
+    match = re.fullmatch(
+        r"(\d+) (?:faktura|faktury|faktur) · (\d+) (?:uhrazena|uhrazeny|uhrazeno)",
+        normalized,
+    )
     if match:
         invoice_count, paid_count = match.groups()
         invoice_noun = "invoice" if invoice_count == "1" else "invoices"
@@ -849,7 +898,7 @@ def _translate_dynamic_ui_text(normalized: str) -> str | None:
         if normalized.startswith(cs_month + " "):
             return en_month + normalized[len(cs_month):]
 
-    match = re.fullmatch(r"(.+?) · (\d+) dokladů", normalized)
+    match = re.fullmatch(r"(.+?) · (\d+) (?:doklad|doklady|dokladů)", normalized)
     if match:
         count = match.group(2)
         noun = "document" if count == "1" else "documents"
@@ -869,9 +918,27 @@ def _translate_dynamic_ui_text(normalized: str) -> str | None:
         return "Created " + normalized[len("Vytvořen "):]
     if normalized.endswith(" · Odesláno"):
         return normalized[:-len("Odesláno")] + "Sent"
-    match = re.fullmatch(r"z (\d+) kontaktů", normalized)
+    match = re.fullmatch(r"z (\d+) (?:kontakt|kontakty|kontaktů)", normalized)
     if match:
-        return f"of {match.group(1)} contacts"
+        count = match.group(1)
+        noun = "contact" if count == "1" else "contacts"
+        return f"of {count} {noun}"
+    match = re.fullmatch(
+        r"Mimo hlavní měnu je v tomto roce ještě (\d+) (?:faktura|faktury|faktur)\.",
+        normalized,
+    )
+    if match:
+        count = match.group(1)
+        noun = "invoice" if count == "1" else "invoices"
+        return f"Outside the main currency, this year also has {count} {noun}."
+    match = re.fullmatch(
+        r"Mimo hlavní měnu v tomto roce: (\d+) (?:faktura|faktury|faktur)\.",
+        normalized,
+    )
+    if match:
+        count = match.group(1)
+        noun = "invoice" if count == "1" else "invoices"
+        return f"Outside the main currency this year: {count} {noun}."
     if normalized == "účtů k prověření":
         return "accounts to review"
     if normalized == "účtů s loginem za 30 dní":
@@ -921,6 +988,7 @@ UI_TRANSLATIONS_EN.update(
         "Pro vybraný rok tu zatím nejsou žádné vystavené faktury.": "No issued invoices for the selected year yet.",
         "Pro vybraný rok tu zatím nejsou žádné částky.": "No amounts for the selected year yet.",
         "Mimo hlavní měnu je v tomto roce ještě": "Outside the main currency, this year also has",
+        "Mimo hlavní měnu v tomto roce": "Outside the main currency this year",
         "Workflow": "Workflow",
         "Stavy faktur za rok": "Invoice statuses for",
         "Měna": "Currency",
