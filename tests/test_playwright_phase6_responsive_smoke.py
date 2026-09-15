@@ -69,6 +69,15 @@ def test_phase6_responsive_core_routes_have_no_unintended_horizontal_scroll(
             for width, height in [(320, 740), (390, 844), (768, 1024)]:
                 context = browser.new_context(viewport={"width": width, "height": height})
                 page = context.new_page()
+                response = page.goto(f"{base_url}/password/reset")
+                assert response is None or response.status < 400
+                page.locator("body").wait_for()
+                assert page.get_by_role("link", name="Přihlásit").is_visible()
+                _assert_no_document_horizontal_scroll(page)
+                page.screenshot(
+                    path=str(artifact_root / f"{width}px-public-password-reset.png"),
+                    full_page=True,
+                )
                 _login(page, base_url)
                 for path, name in routes:
                     response = page.goto(f"{base_url}{path}")
