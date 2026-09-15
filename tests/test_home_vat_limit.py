@@ -140,6 +140,23 @@ def test_home_shows_current_year_vat_limit_progress(monkeypatch, tmp_path):
     assert str(current_year - 1) in response.text
     assert "Nezahrnuto cizoměnných faktur" in response.text
     assert "Od 1. 1. 2025" in response.text
+    assert "1 doklad" in response.text
+    assert "1 dokladů" not in response.text
+    assert "1 faktura" in response.text
+
+    switched = client.post(
+        "/settings/language",
+        data={"ui_language": "en", "next": "/"},
+        follow_redirects=False,
+    )
+    assert switched.status_code == 303
+
+    english_response = client.get("/")
+    assert english_response.status_code == 200
+    assert "1 document" in english_response.text
+    assert "1 documents" not in english_response.text
+    assert "1 invoice" in english_response.text
+    assert "1 invoices" not in english_response.text
 
     _reset_settings_and_db()
 

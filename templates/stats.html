@@ -96,7 +96,7 @@
               <div class="stats-rolling-row">
                 <div class="stats-rolling-month">
                   <strong>{{ item.short_label }}</strong>
-                  <span>{{ item.invoice_count }} faktur{% if item.paid_count %} · {{ item.paid_count }} uhrazeno{% endif %}</span>
+                  <span>{{ ui_count(item.invoice_count, "invoice") }}{% if item.paid_count %} · {{ ui_count(item.paid_count, "paid_invoice") }}{% endif %}</span>
                 </div>
                 <div class="stats-rolling-metric stats-rolling-metric-card">
                   <span>Vyfakturováno {{ vat_view_label }}</span>
@@ -133,7 +133,7 @@
                 <a class="stats-bar-row {% if item.selected %}is-selected{% endif %}" href="/stats?year={{ item.year }}&vat_view={{ vat_view }}">
                   <div class="stats-bar-meta">
                     <strong>{{ item.year }}</strong>
-                    <span>{{ item.invoice_count }} faktur</span>
+                    <span>{{ ui_count(item.invoice_count, "invoice") }}</span>
                   </div>
                   <div class="stats-bar-track">
                     <span class="stats-bar-fill" style="width: {{ item.bar_percent }}%"></span>
@@ -199,7 +199,7 @@
               </table>
             </div>
             {% if foreign_currency_invoice_count %}
-              <p class="muted">Mimo hlavní měnu je v tomto roce ještě {{ foreign_currency_invoice_count }} faktur.</p>
+              <p class="muted">{{ ui_t("Mimo hlavní měnu v tomto roce") }}: {{ ui_count(foreign_currency_invoice_count, "invoice") }}.</p>
             {% endif %}
           {% else %}
             <div class="empty-state">Pro vybraný rok tu zatím nejsou žádné částky.</div>
