@@ -125,6 +125,21 @@ def test_contacts_page_ok():
     res = client.get("/contacts")
     assert res.status_code == 200
     assert "kontakt" in res.text.lower()
+    assert "<strong>1 kontakt</strong>" in res.text
+    assert "Celkem:" in res.text
+
+    switched = client.post(
+        "/settings/language",
+        data={"ui_language": "en", "next": "/contacts"},
+        follow_redirects=False,
+    )
+    assert switched.status_code == 303
+
+    english_res = client.get("/contacts")
+    assert english_res.status_code == 200
+    assert "<strong>1 contact</strong>" in english_res.text
+    assert "1 contacts" not in english_res.text
+    assert "Total:" in english_res.text
 
 
 def test_invoices_page_ok():

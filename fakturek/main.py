@@ -82,6 +82,7 @@ from fakturek.settings import get_settings
 from fakturek.invoice_themes import INVOICE_PDF_THEME_OPTIONS, INVOICE_PDF_THEME_DESCRIPTIONS, normalize_invoice_pdf_theme, pdf_theme_to_invoice_style
 from fakturek.ui_i18n import (
     UI_LANGUAGE_OPTIONS,
+    format_ui_count,
     normalize_ui_language,
     translate_html_document,
     translate_ui_text,
@@ -1651,6 +1652,7 @@ def create_app() -> FastAPI:
             "ui_language_options": UI_LANGUAGE_OPTIONS,
             "ui_i18n_payload": ui_translation_payload(language),
             "ui_t": (lambda text: translate_ui_text(text, language)),
+            "ui_count": (lambda count, entity: format_ui_count(count, entity, language)),
         }
 
     templates.context_processors.append(_ui_language_template_context)

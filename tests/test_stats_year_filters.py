@@ -123,6 +123,17 @@ def test_stats_page_supports_year_filters_and_charts(monkeypatch, tmp_path):
                     currency="EUR",
                     total_cents=10_000_00,
                 ),
+                Invoice(
+                    id=6,
+                    subject_id=1,
+                    contact_id=1,
+                    number=f"{current_year}-0004",
+                    status="issued",
+                    issue_date=date(current_year, 7, 2),
+                    due_date=date(current_year, 7, 16),
+                    currency="EUR",
+                    total_cents=5_000_00,
+                ),
             ]
         )
         db.commit()
@@ -168,10 +179,29 @@ def test_stats_page_supports_year_filters_and_charts(monkeypatch, tmp_path):
     assert f"Invoice statuses for {current_year}" in english_stats
     assert ">Paid<" in english_stats
     assert "Stavy faktur za rok" not in english_stats
+    assert "1 invoice · 1 paid" in english_stats
+    assert "2 invoices" in english_stats
+    assert "Mimo hlavní měnu v tomto roce: 2 faktury." in current_response.text
+    assert "Outside the main currency this year: 2 invoices." in english_stats
 
     previous_response = client.get(f"/stats?year={previous_year}")
     assert previous_response.status_code == 200
     assert "55 000,00 CZK" in previous_response.text
     assert f"Stavy faktur za rok {previous_year}" in previous_response.text
+    assert "1 faktura" in previous_response.text
+
+    switched = client.post(
+        "/settings/language",
+        data={"ui_language": "en", "next": f"/stats?year={current_year}"},
+        follow_redirects=False,
+    )
+    assert switched.status_code == 303
+
+    english_response = client.get(f"/stats?year={current_year}")
+    assert english_response.status_code == 200
+    assert "1 invoice · 1 paid" in english_response.text
+    assert "2 invoices" in english_response.text
+    assert "1 invoices" not in english_response.text
+    assert "Outside the main currency this year: 2 invoices." in english_response.text
 
     _reset_settings_and_db()

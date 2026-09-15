@@ -98,7 +98,7 @@
             <div class="info-grid dashboard-info-grid">
               <div class="info-pair">
                 <span>{{ client.name }}</span>
-                <strong>{{ client.invoice_count }} dokladů</strong>
+                <strong>{{ ui_count(client.invoice_count, "document") }}</strong>
               </div>
               <div class="info-pair">
                 <span>Celkem</span>
@@ -124,7 +124,7 @@
             <a class="stats-bar-row {% if item.selected %}is-selected{% endif %}" href="/stats?year={{ item.year }}">
               <div class="stats-bar-meta">
                 <strong>{{ item.year }}</strong>
-                <span>{{ item.invoice_count }} faktur</span>
+                <span>{{ ui_count(item.invoice_count, "invoice") }}</span>
               </div>
               <div class="stats-bar-track">
                 <span class="stats-bar-fill" style="width: {{ item.bar_percent }}%"></span>

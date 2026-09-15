@@ -41,8 +41,8 @@
 
         {% if pagination %}
           <p class="filters-summary">
-            Zobrazeno <strong>{{ pagination.from_item }}–{{ pagination.to_item }}</strong>
-            z <strong>{{ pagination.total_count }}</strong> kontaktů
+            {{ ui_t("Zobrazeno") }} <strong>{{ pagination.from_item }}–{{ pagination.to_item }}</strong>
+            · {{ ui_t("Celkem") }}: <strong>{{ ui_count(pagination.total_count, "contact") }}</strong>
           </p>
         {% endif %}
       </form>
