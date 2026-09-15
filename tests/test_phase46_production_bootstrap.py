@@ -99,6 +99,7 @@ def test_login_page_never_shows_bootstrap_credentials_in_prod(monkeypatch):
     monkeypatch.setenv("SETUP_TOKEN", "setup-" + "f" * 48)
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://invoices.example.test")
     monkeypatch.setenv("APP_BASE_URL", "https://app.example.test")
+    monkeypatch.setenv("DATABASE_URL", "sqlite+pysqlite:///:memory:")
     monkeypatch.setenv("FAKTUREK_SHOW_BOOTSTRAP_CREDS", "1")
     monkeypatch.setenv("FAKTUREK_BOOTSTRAP_USERNAME", "KerryCZE")
     monkeypatch.setenv("FAKTUREK_BOOTSTRAP_PASSWORD", "BootstrapPass123!")

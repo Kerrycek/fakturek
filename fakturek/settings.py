@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from functools import lru_cache
+from ipaddress import ip_address
 from urllib.parse import urlsplit
 
 from fakturek.security import validate_outbound_base_url
@@ -29,6 +30,16 @@ def _require(name: str) -> str:
     if v is None or not v.strip():
         raise RuntimeError(f"Missing required environment variable: {name}")
     return v.strip()
+
+
+def _is_explicit_loopback_host(value: str) -> bool:
+    host = value.strip().lower().strip("[]")
+    if host == "localhost":
+        return True
+    try:
+        return ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 @dataclass(frozen=True)
@@ -179,13 +190,10 @@ def get_settings() -> Settings:
     ) or ("127.0.0.1", "::1", "localhost")
 
     # MySQL/MariaDB DSN. For local dev with docker compose, use the service name "db".
-    database_url = (
-        _getenv(
-            "DATABASE_URL",
-            "mysql+pymysql://fakturek:fakturek@127.0.0.1:3306/fakturek?charset=utf8mb4",
-        )
-        or ""
-    ).strip()
+    database_url_raw = (_getenv("DATABASE_URL") or "").strip()
+    database_url = database_url_raw or (
+        "mysql+pymysql://fakturek:fakturek@127.0.0.1:3306/fakturek?charset=utf8mb4"
+    )
 
     def _validate_secret(name: str, value: str, *, min_len: int = 32) -> None:
         lowered = value.strip().lower()
@@ -216,6 +224,8 @@ def get_settings() -> Settings:
             raise RuntimeError("DEBUG must be disabled in production")
         if not auth_required:
             raise RuntimeError("AUTH_REQUIRED must be enabled in production")
+        if not database_url_raw:
+            raise RuntimeError("DATABASE_URL must be set explicitly in production")
         secret_values = [
             ("SESSION_SIGNING_KEY", secret_key),
             ("SIGNUP_TOKEN_KEY", signup_token_key),
@@ -357,6 +367,15 @@ def get_settings() -> Settings:
 
     smtp_use_tls = _parse_bool(_getenv("SMTP_USE_TLS"), default=False)
     smtp_use_starttls = _parse_bool(_getenv("SMTP_USE_STARTTLS"), default=True)
+    if (
+        app_env == "prod"
+        and (smtp_username or smtp_password)
+        and not (smtp_use_tls or smtp_use_starttls)
+        and not _is_explicit_loopback_host(smtp_host)
+    ):
+        raise RuntimeError(
+            "SMTP credentials require TLS, STARTTLS, or an explicit loopback host in production"
+        )
 
     try:
         smtp_timeout_seconds = float((_getenv("SMTP_TIMEOUT_SECONDS", "10") or "10").strip())
@@ -400,6 +419,15 @@ def get_settings() -> Settings:
     payment_sync_imap_password = (_getenv("PAYMENT_SYNC_IMAP_PASSWORD") or "").strip() or None
     payment_sync_imap_mailbox = (_getenv("PAYMENT_SYNC_IMAP_MAILBOX", "INBOX") or "INBOX").strip() or "INBOX"
     payment_sync_imap_use_ssl = _parse_bool(_getenv("PAYMENT_SYNC_IMAP_USE_SSL"), default=True)
+    if (
+        app_env == "prod"
+        and (payment_sync_imap_username or payment_sync_imap_password)
+        and not payment_sync_imap_use_ssl
+        and not _is_explicit_loopback_host(payment_sync_imap_host)
+    ):
+        raise RuntimeError(
+            "IMAP credentials require SSL or an explicit loopback host in production"
+        )
     payment_sync_alert_domain = (_getenv("PAYMENT_SYNC_ALERT_DOMAIN") or "").strip().lower() or None
 
     # ------------------------------------------------------------------

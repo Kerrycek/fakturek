@@ -189,7 +189,13 @@ def create_app() -> FastAPI:
     #   FAKTUREK_VERBOSE_ERRORS=1
     #   FAKTUREK_LOG_DIR=/state (or /workspace/var)
 
-    verbose_errors = _env_bool("FAKTUREK_VERBOSE_ERRORS", default=settings.debug)
+    # Never render exception details in production, even if a stale or
+    # accidentally copied environment file requests verbose error pages.
+    # Production tracebacks belong only in the server-side error log.
+    verbose_errors = settings.app_env != "prod" and _env_bool(
+        "FAKTUREK_VERBOSE_ERRORS",
+        default=settings.debug,
+    )
     log_dir_env = (os.getenv("FAKTUREK_LOG_DIR") or "").strip()
 
     # Best-effort: attach a file handler to the root logger so *all* logs
