@@ -52,6 +52,7 @@ def test_mobile_controls_and_navigation_are_touch_friendly():
     assert ".dashboard-client-list .dashboard-info-grid" in css
     assert ".table-wrap:has(> .responsive-card-table)" in css
     assert ".responsive-card-table .admin-json-preview" in css
+    assert "body.tabler-direct .responsive-card-table thead {\n    position: absolute;\n    width: 1px;" in css
     assert "@media (max-width: 900px)" in css
     app_css = _read("static/app.css")
     assert ".invoice-list-table-wrap .table {\n  min-width: min(56rem, 100%);" in app_css
