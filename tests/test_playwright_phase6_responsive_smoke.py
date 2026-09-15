@@ -108,26 +108,55 @@ def test_phase6_responsive_core_routes_have_no_unintended_horizontal_scroll(
             ]:
                 context = browser.new_context(viewport={"width": width, "height": height})
                 page = context.new_page()
-                response = page.goto(f"{base_url}/password/reset")
-                assert response is None or response.status < 400
-                page.locator("body").wait_for()
-                login_link = page.get_by_role("link", name="Přihlásit", exact=True)
-                assert login_link.is_visible()
-                login_box = login_link.bounding_box()
-                assert login_box is not None
-                assert login_box["x"] >= -1
-                assert login_box["x"] + login_box["width"] <= width + 1
-                _assert_no_document_horizontal_scroll(page)
-                page.screenshot(
-                    path=str(artifact_root / f"{width}px-public-password-reset.png"),
-                    full_page=True,
-                )
+                for public_path, public_name in [
+                    ("/login", "login"),
+                    ("/signup", "signup"),
+                    ("/password/reset", "password-reset"),
+                ]:
+                    response = page.goto(f"{base_url}{public_path}")
+                    assert response is None or response.status < 400
+                    page.locator("body").wait_for()
+                    assert page.locator(".navbar-toggler").count() == 0
+                    if public_path != "/login":
+                        login_link = page.get_by_role("link", name="Přihlásit", exact=True).first
+                        assert login_link.is_visible()
+                        login_box = login_link.bounding_box()
+                        assert login_box is not None
+                        assert login_box["x"] >= -1
+                        assert login_box["x"] + login_box["width"] <= width + 1
+                    _assert_no_document_horizontal_scroll(page)
+                    page.screenshot(
+                        path=str(artifact_root / f"{width}px-public-{public_name}.png"),
+                        full_page=True,
+                    )
                 _login(page, base_url)
                 for path, name in routes:
                     response = page.goto(f"{base_url}{path}")
                     assert response is None or response.status < 400
                     page.locator("body").wait_for()
                     _assert_no_document_horizontal_scroll(page)
+                    if width < 768 and path == "/":
+                        page.wait_for_function(
+                            "() => window.tabler && window.tabler.bootstrap && window.tabler.bootstrap.Collapse"
+                        )
+                        menu_toggle = page.locator('.navbar-toggler[aria-controls="navbar-menu"]')
+                        assert menu_toggle.is_visible()
+                        assert page.locator("#navbar-menu").count() == 1
+                        menu_toggle.click()
+                        page.wait_for_timeout(300)
+                        menu_state = page.locator("#navbar-menu").evaluate(
+                            """(element) => ({
+                              className: element.className,
+                              display: getComputedStyle(element).display,
+                              expanded: document.querySelector('.navbar-toggler')?.getAttribute('aria-expanded'),
+                            })"""
+                        )
+                        assert "show" in menu_state["className"].split(), menu_state
+                        assert menu_state["display"] != "none", menu_state
+                        assert menu_state["expanded"] == "true", menu_state
+                        contacts_link = page.locator('#navbar-menu a[href="/contacts"]')
+                        contacts_link.wait_for(state="visible")
+                        assert contacts_link.is_visible()
                     if width == 901 and path == "/invoices":
                         table = page.locator(".invoice-list-mobile-table")
                         assert table.locator("tbody tr").count() == 1

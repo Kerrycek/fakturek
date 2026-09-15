@@ -65,6 +65,16 @@ def test_login_submit_regression_select_shadowing(monkeypatch, tmp_path):
     login_page = client.get("/login")
     assert login_page.status_code == 200
 
+    for anonymous_path in ("/login", "/signup", "/password/reset"):
+        anonymous_page = client.get(anonymous_path)
+        assert anonymous_page.status_code == 200
+        assert 'data-bs-target="#navbar-menu"' not in anonymous_page.text
+        assert 'aria-controls="navbar-menu"' not in anonymous_page.text
+
+    signup_page = client.get("/signup")
+    assert 'href="/login"' in signup_page.text
+    assert "Přihlásit" in signup_page.text
+
     m = re.search(r'name="csrf_token" value="([^"]+)"', login_page.text)
     assert m is not None
     csrf_token = m.group(1)
@@ -82,5 +92,10 @@ def test_login_submit_regression_select_shadowing(monkeypatch, tmp_path):
 
     assert response.status_code == 303
     assert response.headers["location"] == "/"
+
+    authenticated_page = client.get("/")
+    assert authenticated_page.status_code == 200
+    assert 'data-bs-target="#navbar-menu"' in authenticated_page.text
+    assert 'id="navbar-menu"' in authenticated_page.text
 
     _reset_settings_and_db()
