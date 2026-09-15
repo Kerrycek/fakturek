@@ -2629,7 +2629,28 @@ def create_app() -> FastAPI:
 
     def _request_wants_json(request: Request) -> bool:
         accept_header = (request.headers.get("accept") or "").lower()
-        return "application/json" in accept_header and "text/html" not in accept_header
+        # Exact media types keep browser HTML as the tie-breaker while honoring q-values.
+        def _quality_for(media_type: str) -> float:
+            qualities: list[float] = []
+            for raw_item in accept_header.split(","):
+                media, *parameters = (part.strip() for part in raw_item.split(";"))
+                if media != media_type:
+                    continue
+                quality = 1.0
+                for parameter in parameters:
+                    key, separator, value = parameter.partition("=")
+                    if separator and key.strip() == "q":
+                        try:
+                            quality = min(1.0, max(0.0, float(value.strip())))
+                        except ValueError:
+                            quality = 0.0
+                        break
+                qualities.append(quality)
+            return max(qualities, default=0.0)
+
+        json_quality = _quality_for("application/json")
+        html_quality = _quality_for("text/html")
+        return json_quality > 0 and json_quality > html_quality
 
 
     class _AuthRequiredMiddleware(BaseHTTPMiddleware):
@@ -14240,6 +14261,30 @@ def create_app() -> FastAPI:
         INVOICE_NEW_TITLE = "Nová faktura"
         INVOICE_EDIT_TITLE = "Upravit fakturu"
 
+        def _record_not_found_response(
+            request: Request,
+            *,
+            json_detail: str,
+            back_url: str,
+            back_label: str,
+        ) -> Response:
+            if _request_wants_json(request):
+                return JSONResponse(
+                    status_code=404,
+                    content={"detail": json_detail},
+                    headers={"Vary": "Accept"},
+                )
+            return templates.TemplateResponse(
+                request,
+                "record_not_found.html",
+                {
+                    "back_url": back_url,
+                    "back_label": back_label,
+                },
+                status_code=404,
+                headers={"Vary": "Accept"},
+            )
+
         # Phase-18: introduce explicit "issued" state.
         ALLOWED_INVOICE_STATUSES = ["draft", "issued", "sent", "paid", "cancelled"]
         BULK_INVOICE_ACTION_OPTIONS: list[tuple[str, str]] = [
@@ -14828,7 +14873,12 @@ def create_app() -> FastAPI:
             except SQLAlchemyError as exc:  # type: ignore[misc]
                 return _render_db_disabled(request, title="Kontakt", db_error=str(exc))
             if contact is None:
-                return JSONResponse(status_code=404, content={"detail": "Contact not found"})
+                return _record_not_found_response(
+                    request,
+                    json_detail="Contact not found",
+                    back_url="/contacts",
+                    back_label="Zpět na kontakty",
+                )
 
             try:
                 invoices = db.scalars(
@@ -15153,6 +15203,7 @@ def create_app() -> FastAPI:
             prefill_reminder: dict | None = None,
             status_code: int = 200,
             subject_override: Subject | None = None,
+            friendly_not_found: bool = False,
         ):
             sid = _current_subject_id()
             try:
@@ -15167,6 +15218,13 @@ def create_app() -> FastAPI:
             except SQLAlchemyError as exc:  # type: ignore[misc]
                 return _render_db_disabled(request, title=INVOICE_TITLE, db_error=str(exc))
             if invoice is None:
+                if friendly_not_found:
+                    return _record_not_found_response(
+                        request,
+                        json_detail="Invoice not found",
+                        back_url="/invoices",
+                        back_label="Zpět na faktury",
+                    )
                 return JSONResponse(status_code=404, content={"detail": "Invoice not found"})
 
             try:
@@ -18852,7 +18910,13 @@ def create_app() -> FastAPI:
             notice: str | None = None,
             db: Session = Depends(get_db),
         ):
-            return _render_invoice_detail(request=request, db=db, invoice_id=invoice_id, notice=notice)
+            return _render_invoice_detail(
+                request=request,
+                db=db,
+                invoice_id=invoice_id,
+                notice=notice,
+                friendly_not_found=True,
+            )
 
         # ------------------------------------------------------------------
         # Phase-21: public invoice sharing (enable/disable/rotate token)
