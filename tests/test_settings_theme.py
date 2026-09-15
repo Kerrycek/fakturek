@@ -187,6 +187,7 @@ def test_settings_can_change_language_and_translate_ui(monkeypatch, tmp_path):
     assert settings_page.status_code == 200
     assert '<html lang="en"' in settings_page.text
     assert 'Account and billing settings' in settings_page.text
+    assert 'aria-label="Switch settings sections"' in settings_page.text
     assert 'Interface language' in settings_page.text
     assert 'Jazyk prostředí' not in settings_page.text
     assert 'name="ui_language"' in settings_page.text
