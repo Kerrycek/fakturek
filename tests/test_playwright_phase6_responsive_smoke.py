@@ -66,7 +66,13 @@ def test_phase6_responsive_core_routes_have_no_unintended_horizontal_scroll(
                 ("/invoices/new", "invoice-editor"),
                 ("/settings", "settings"),
             ]
-            for width, height in [(320, 740), (360, 800), (390, 844), (768, 1024)]:
+            for width, height in [
+                (320, 740),
+                (360, 800),
+                (390, 844),
+                (768, 1024),
+                (901, 800),
+            ]:
                 context = browser.new_context(viewport={"width": width, "height": height})
                 page = context.new_page()
                 response = page.goto(f"{base_url}/password/reset")

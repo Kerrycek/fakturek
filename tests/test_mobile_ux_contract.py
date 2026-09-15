@@ -54,6 +54,7 @@ def test_mobile_controls_and_navigation_are_touch_friendly():
     assert ".responsive-card-table .admin-json-preview" in css
     assert "@media (max-width: 900px)" in css
     app_css = _read("static/app.css")
+    assert ".invoice-list-table-wrap .table {\n  min-width: min(56rem, 100%);" in app_css
     assert ".settings-inline-form > select" in app_css
     assert "grid-template-columns: repeat(2, minmax(0, 1fr));" in app_css
     assert ".stack-lg {\n  display: grid;\n  min-width: 0;" in app_css

@@ -2788,7 +2788,7 @@ textarea {
 }
 
 .invoice-list-table-wrap .table {
-  min-width: 56rem;
+  min-width: min(56rem, 100%);
 }
 
 .table {
