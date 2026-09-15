@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+
+{% block title %}Záznam není dostupný – fakturek{% endblock %}
+
+{% block content %}
+  <section class="page-header">
+    <div class="page-header-copy">
+      <p class="page-kicker">404</p>
+      <h1>Záznam není dostupný</h1>
+      <p>Požadovaný záznam se nepodařilo otevřít.</p>
+    </div>
+    <div class="page-header-actions">
+      <a class="btn primary" href="{{ back_url }}">{{ back_label }}</a>
+    </div>
+  </section>
+
+  <section class="card empty-state">
+    <h2>Jak pokračovat</h2>
+    <p>
+      Záznam mohl být odstraněný nebo k němu nemáš přístup. Vrať se do přehledu
+      a zkus ho vyhledat tam.
+    </p>
+  </section>
+{% endblock %}
