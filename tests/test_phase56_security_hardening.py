@@ -41,6 +41,7 @@ def _set_valid_production_environment(monkeypatch) -> None:
     monkeypatch.setenv("INTERNAL_JOB_TOKEN", "jobs-" + "e" * 48)
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://invoices.example.test")
     monkeypatch.setenv("APP_BASE_URL", "https://app.example.test")
+    monkeypatch.setenv("DATABASE_URL", "sqlite+pysqlite:///:memory:")
 
 
 def _setup_sqlite_app(monkeypatch, tmp_path, *, login_rate_limit_max: int = 10):
@@ -661,12 +662,77 @@ def test_production_settings_require_canonical_origins(monkeypatch):
     get_settings.cache_clear()
 
 
-def test_production_error_page_does_not_leak_exception_or_log_path(monkeypatch, tmp_path):
+def test_production_settings_require_explicit_database_url(monkeypatch):
+    _set_valid_production_environment(monkeypatch)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    get_settings.cache_clear()
+
+    with pytest.raises(RuntimeError, match="DATABASE_URL"):
+        get_settings()
+
+    get_settings.cache_clear()
+
+
+@pytest.mark.parametrize("mail_protocol", ("smtp", "imap"))
+def test_production_settings_reject_plaintext_mail_credentials(monkeypatch, mail_protocol):
+    _set_valid_production_environment(monkeypatch)
+    if mail_protocol == "smtp":
+        monkeypatch.setenv("SMTP_HOST", "smtp.example.test")
+        monkeypatch.setenv("SMTP_USERNAME", "mailer")
+        monkeypatch.setenv("SMTP_PASSWORD", "mail-password")
+        monkeypatch.setenv("SMTP_USE_TLS", "0")
+        monkeypatch.setenv("SMTP_USE_STARTTLS", "0")
+        expected = "SMTP credentials require TLS"
+    else:
+        monkeypatch.setenv("PAYMENT_SYNC_IMAP_HOST", "imap.example.test")
+        monkeypatch.setenv("PAYMENT_SYNC_IMAP_USERNAME", "inbox")
+        monkeypatch.setenv("PAYMENT_SYNC_IMAP_PASSWORD", "mail-password")
+        monkeypatch.setenv("PAYMENT_SYNC_IMAP_USE_SSL", "0")
+        expected = "IMAP credentials require SSL"
+    get_settings.cache_clear()
+
+    with pytest.raises(RuntimeError, match=expected):
+        get_settings()
+
+    get_settings.cache_clear()
+
+
+@pytest.mark.parametrize("mail_protocol", ("smtp", "imap"))
+@pytest.mark.parametrize("loopback_host", ("localhost", "127.0.0.1", "::1"))
+def test_production_settings_allow_plaintext_mail_only_on_explicit_loopback(
+    monkeypatch, mail_protocol, loopback_host
+):
+    _set_valid_production_environment(monkeypatch)
+    if mail_protocol == "smtp":
+        monkeypatch.setenv("SMTP_HOST", loopback_host)
+        monkeypatch.setenv("SMTP_USERNAME", "mailer")
+        monkeypatch.setenv("SMTP_PASSWORD", "mail-password")
+        monkeypatch.setenv("SMTP_USE_TLS", "0")
+        monkeypatch.setenv("SMTP_USE_STARTTLS", "0")
+    else:
+        monkeypatch.setenv("PAYMENT_SYNC_IMAP_HOST", loopback_host)
+        monkeypatch.setenv("PAYMENT_SYNC_IMAP_USERNAME", "inbox")
+        monkeypatch.setenv("PAYMENT_SYNC_IMAP_PASSWORD", "mail-password")
+        monkeypatch.setenv("PAYMENT_SYNC_IMAP_USE_SSL", "0")
+    get_settings.cache_clear()
+
+    settings = get_settings()
+
+    if mail_protocol == "smtp":
+        assert settings.smtp_host == loopback_host
+    else:
+        assert settings.payment_sync_imap_host == loopback_host
+
+    get_settings.cache_clear()
+
+
+@pytest.mark.parametrize("verbose_value", ("0", "1"))
+def test_production_error_page_does_not_leak_exception_or_log_path(monkeypatch, tmp_path, verbose_value):
     db_path = tmp_path / "errors.sqlite3"
     log_dir = tmp_path / "private-logs"
     _set_valid_production_environment(monkeypatch)
     monkeypatch.setenv("DATABASE_URL", f"sqlite+pysqlite:///{db_path}")
-    monkeypatch.setenv("FAKTUREK_VERBOSE_ERRORS", "0")
+    monkeypatch.setenv("FAKTUREK_VERBOSE_ERRORS", verbose_value)
     monkeypatch.setenv("FAKTUREK_LOG_DIR", str(log_dir))
     _reset_settings_and_db()
 
