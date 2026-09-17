@@ -17,6 +17,7 @@ sqlalchemy = pytest.importorskip("sqlalchemy")
 import fakturek.db as db_module
 import fakturek.security as security_module
 from fakturek.auth import hash_password
+from fakturek.bank_sync import BankSyncError
 from fakturek.db import Base
 from fakturek.security import decrypt_secret, encrypt_secret
 from fakturek.settings import get_settings
@@ -161,6 +162,60 @@ def test_internal_jobs_require_explicit_token(monkeypatch, tmp_path):
     )
     assert allowed.status_code == 200
     assert allowed.json()["status"] == "ok"
+
+    _reset_settings_and_db()
+
+
+def test_internal_bank_sync_retries_transport_failure_without_500(monkeypatch, tmp_path):
+    client, SessionLocal = _setup_sqlite_app(monkeypatch, tmp_path)
+
+    from fakturek.models import BankTransaction, SubjectBankAccount
+
+    with SessionLocal() as db:
+        db.add(
+            SubjectBankAccount(
+                id=1,
+                subject_id=1,
+                label="Synthetic Fio account",
+                account_number="2200041594/2010",
+                currency="CZK",
+                payment_sync_provider="fio_api",
+                payment_sync_enabled=True,
+                payment_sync_auto_pair=False,
+                fio_api_token="synthetic-token",
+            )
+        )
+        db.commit()
+
+    attempts = 0
+
+    def fail_transport(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise BankSyncError("Nepodařilo se načíst odpověď z Fio API.")
+
+    monkeypatch.setattr("fakturek.main.fetch_fio_transactions", fail_transport)
+    monkeypatch.setattr("fakturek.main.time.sleep", lambda _seconds: None)
+
+    response = client.post(
+        "/internal/jobs/bank-sync",
+        headers={"X-Internal-Job-Token": "job-secret"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert attempts == 2
+    assert payload["errors"] == [
+        "Synchronizace plateb se nepodařila. Podrobnosti jsou v serverovém logu."
+    ]
+    assert "synthetic-token" not in response.text
+    assert "Fio API" not in response.text
+
+    with SessionLocal() as db:
+        account = db.get(SubjectBankAccount, 1)
+        assert account.payment_sync_cursor_date is None
+        assert db.scalar(sqlalchemy.select(sqlalchemy.func.count(BankTransaction.id))) == 0
 
     _reset_settings_and_db()
 

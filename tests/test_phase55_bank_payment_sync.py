@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import date
+import http.client
+import json
 from urllib.parse import unquote
 
 import pytest
@@ -19,6 +21,7 @@ from fakturek.bank_sync import (
     parse_csob_cz_email,
     parse_fio_email_cz,
     parse_raiffeisenbank_cz_email,
+    fetch_fio_transactions,
 )
 from fakturek.db import Base
 from fakturek.security import decrypt_secret
@@ -113,6 +116,76 @@ def _setup_sqlite_app(monkeypatch, tmp_path):
 
     client = TestClient(create_app(), base_url="https://app.example.test")
     return client, SessionLocal
+
+
+def test_fetch_fio_normalizes_incomplete_read_without_leaking_transport_error(monkeypatch):
+    class BrokenResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            raise http.client.IncompleteRead(b"partial-secret-token")
+
+    monkeypatch.setattr("fakturek.bank_sync.urlopen", lambda *args, **kwargs: BrokenResponse())
+    with pytest.raises(BankSyncError, match="Nepodařilo se načíst odpověď z Fio API") as error:
+        fetch_fio_transactions("secret-token", date_from=date(2026, 1, 1), date_to=date(2026, 1, 2), base_url="https://fio.example.test")
+    assert "partial-secret-token" not in str(error.value)
+
+
+def test_fetch_fio_recovers_after_incomplete_read(monkeypatch):
+    class Response:
+        def __init__(self, body):
+            self.body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return self.body
+
+    responses = [http.client.IncompleteRead(b"partial"), json.dumps({"accountStatement": {"transactionList": {"transaction": []}}}).encode()]
+    def fake_urlopen(*args, **kwargs):
+        value = responses.pop(0)
+        if isinstance(value, Exception):
+            class Broken(Response):
+                def read(self):
+                    raise value
+            return Broken(b"")
+        return Response(value)
+    monkeypatch.setattr("fakturek.bank_sync.urlopen", fake_urlopen)
+    with pytest.raises(BankSyncError):
+        fetch_fio_transactions("token", date_from=date(2026, 1, 1), date_to=date(2026, 1, 2), base_url="https://fio.example.test")
+    assert fetch_fio_transactions("token", date_from=date(2026, 1, 1), date_to=date(2026, 1, 2), base_url="https://fio.example.test") == []
+
+
+def test_manual_fio_sync_retries_transport_failure_without_advancing_cursor(monkeypatch, tmp_path):
+    client, SessionLocal = _setup_sqlite_app(monkeypatch, tmp_path)
+    attempts = 0
+
+    def fail_transport(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise BankSyncError("Nepodařilo se načíst odpověď z Fio API.")
+
+    monkeypatch.setattr("fakturek.main.fetch_fio_transactions", fail_transport)
+    response = client.post("/settings/accounts/1/sync", follow_redirects=False)
+    assert response.status_code == 303
+    assert attempts == 2
+    with SessionLocal() as db:
+        from fakturek.models import BankTransaction, SubjectBankAccount
+        account = db.get(SubjectBankAccount, 1)
+        assert account.payment_sync_cursor_date is None
+        assert db.scalar(sqlalchemy.select(sqlalchemy.func.count(BankTransaction.id))) == 0
+        assert "Synchronizace plateb se nepodařila" in (account.payment_sync_last_error or "")
+    _reset_settings_and_db()
+
+
 
 
 def test_settings_account_edit_saves_fio_sync_configuration(monkeypatch, tmp_path):

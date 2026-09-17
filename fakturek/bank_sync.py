@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import imaplib
 import json
 import re
@@ -719,6 +720,12 @@ def fetch_fio_transactions(
         raise BankSyncError(msg) from exc
     except URLError as exc:
         raise BankSyncError(f"Nelze se připojit k Fio API: {exc}") from exc
+    except TimeoutError as exc:
+        raise BankSyncError("Časový limit připojení k Fio API vypršel.") from exc
+    except (http.client.HTTPException, OSError) as exc:
+        # IncompleteRead and other low-level response/socket failures must not
+        # leak transport details (which may contain request data) to callers.
+        raise BankSyncError("Nepodařilo se načíst odpověď z Fio API.") from exc
 
     try:
         payload = json.loads(body.decode("utf-8"))
