@@ -277,7 +277,7 @@ def test_native_backup_upload_and_process_require_csrf(monkeypatch, tmp_path):
 
 def test_native_backup_reuses_existing_contacts_and_catalog_items(monkeypatch, tmp_path):
     _client, SessionLocal, import_root = _setup(monkeypatch, tmp_path)
-    contacts = b'{"name":"Native customer","email":"replacement@example.test"}\n'
+    contacts = b'{"name":"Native customer","email":"customer@example.test"}\n'
     catalog = (
         b'{"description":"Native service","quantity":"2.00","unit":"hour",'
         b'"unit_price_cents":12345,"vat_rate":"21.00","currency":"CZK"}\n'
@@ -356,6 +356,101 @@ def test_native_backup_plan_preserves_distinct_same_name_contacts(monkeypatch, t
             row.email
             for row in db.query(Contact).filter_by(subject_id=2).order_by(Contact.email).all()
         } == {"first@example.test", "second@example.test"}
+    _reset()
+
+
+def test_native_backup_does_not_name_fallback_after_an_email_miss(monkeypatch, tmp_path):
+    _client, SessionLocal, import_root = _setup(monkeypatch, tmp_path)
+    contacts = (
+        b'{"name":"Same name","email":"first@example.test"}\n'
+        b'{"name":"Same name","email":"second@example.test"}\n'
+    )
+    payload = _manifest_zip(contacts=contacts)
+    stored = import_root / "preexisting-name-collision.zip"
+    stored.parent.mkdir(parents=True, exist_ok=True)
+    stored.write_bytes(payload)
+    run = SimpleNamespace(
+        subject_id=2,
+        file_path="preexisting-name-collision.zip",
+        file_sha256=hashlib.sha256(payload).hexdigest(),
+        summary_json=json.dumps({"config": {"contact_conflict_mode": "merge_existing"}}),
+    )
+    with SessionLocal() as db:
+        from fakturek.models import Contact
+        from fakturek.native_backup import (
+            preview_native_backup_import,
+            process_native_backup_import,
+        )
+
+        db.add(Contact(subject_id=2, name="Same name", email="first@example.test"))
+        db.commit()
+        preview = preview_native_backup_import(
+            db,
+            run=run,
+            subject_id=2,
+            import_storage_root=import_root,
+            max_upload_bytes=25 * 1024 * 1024,
+        )
+        summary = process_native_backup_import(
+            db,
+            run=run,
+            subject_id=2,
+            import_storage_root=import_root,
+            max_upload_bytes=25 * 1024 * 1024,
+        )
+        db.commit()
+        assert preview["contacts"]["will_create"] == summary["contacts"]["created"] == 1
+        assert preview["contacts"]["will_reuse"] == summary["contacts"]["reused"] == 1
+        assert {
+            row.email
+            for row in db.query(Contact).filter_by(subject_id=2).order_by(Contact.email).all()
+        } == {"first@example.test", "second@example.test"}
+    _reset()
+
+
+def test_native_backup_planning_bulk_loads_maps_instead_of_querying_each_row(monkeypatch, tmp_path):
+    _client, SessionLocal, import_root = _setup(monkeypatch, tmp_path)
+    contacts = b"".join(
+        (
+            json.dumps({"name": f"Bulk {number}", "email": f"bulk-{number}@example.test"}) + "\n"
+        ).encode()
+        for number in range(1_200)
+    )
+    payload = _manifest_zip(contacts=contacts)
+    stored = import_root / "bulk-plan.zip"
+    stored.parent.mkdir(parents=True, exist_ok=True)
+    stored.write_bytes(payload)
+    run = SimpleNamespace(
+        subject_id=2,
+        file_path="bulk-plan.zip",
+        file_sha256=hashlib.sha256(payload).hexdigest(),
+        summary_json="",
+    )
+    with SessionLocal() as db:
+        from sqlalchemy import event
+
+        from fakturek.native_backup import build_native_import_plan
+
+        statements: list[str] = []
+
+        def record(_connection, _cursor, statement, _parameters, _context, _executemany):
+            statements.append(statement)
+
+        event.listen(db.bind, "before_cursor_execute", record)
+        try:
+            plan = build_native_import_plan(
+                db,
+                run=run,
+                subject_id=2,
+                import_storage_root=import_root,
+                max_upload_bytes=25 * 1024 * 1024,
+            )
+        finally:
+            event.remove(db.bind, "before_cursor_execute", record)
+        assert len(plan.contacts) == 1_200
+        # Subject + two snapshots + three 500-row ImportMap chunks; a per-row
+        # lookup would exceed this by orders of magnitude.
+        assert len(statements) <= 7
     _reset()
 
 
@@ -443,6 +538,32 @@ def test_native_backup_process_claim_allows_only_one_concurrent_application(monk
             == 1
         )
         assert db.query(ImportMap).filter_by(subject_id=1, source="fakturek_native_v1").count() == 2
+    _reset()
+
+
+def test_native_backup_process_failure_rolls_back_rows_before_marking_error(monkeypatch, tmp_path):
+    client, SessionLocal, _import_root = _setup(monkeypatch, tmp_path)
+    contacts = b'{"name":"Rollback customer","email":"rollback@example.test"}\n'
+    run_id = _upload(client, _manifest_zip(contacts=contacts))
+    import fakturek.main as main_module
+
+    def fail_after_first_flush(db, **_kwargs):
+        from fakturek.models import Contact
+
+        db.add(Contact(subject_id=1, name="Should roll back", email="no@example.test"))
+        db.flush()
+        raise RuntimeError("injected native backup failure")
+
+    monkeypatch.setattr(main_module, "process_native_backup_import", fail_after_first_flush)
+    response = client.post(f"/imports/{run_id}/process", follow_redirects=False)
+    assert response.status_code == 303
+    with SessionLocal() as db:
+        from fakturek.models import Contact, ImportMap, ImportRun, InvoiceCatalogItem
+
+        assert db.query(Contact).filter_by(subject_id=1, name="Should roll back").count() == 0
+        assert db.query(InvoiceCatalogItem).filter_by(subject_id=1).count() == 1
+        assert db.query(ImportMap).filter_by(subject_id=1, source="fakturek_native_v1").count() == 0
+        assert db.get(ImportRun, run_id).status == "error"
     _reset()
 
 

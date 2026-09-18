@@ -127,6 +127,7 @@ from fakturek.native_backup import (
     MEDIA_TYPE as NATIVE_BACKUP_MEDIA_TYPE,
     SOURCE as NATIVE_BACKUP_SOURCE,
     build_native_backup_bytes,
+    build_native_import_plan,
     preview_native_backup_import,
     process_native_backup_import,
 )
@@ -14211,12 +14212,21 @@ def create_app() -> FastAPI:
             is_native_backup = (
                 str(getattr(run, "source", "") or "").strip().lower() == NATIVE_BACKUP_SOURCE
             )
+            native_plan = None
             if is_native_backup:
                 # Validate every native member before changing even the run state.
-                # The processor validates again immediately before its first data write.
+                # Apply this exact immutable plan after the atomic run claim so
+                # preview and processing cannot disagree about earlier rows.
                 try:
                     max_upload_bytes = (
                         max(1, int(getattr(settings, "import_max_upload_mb", 25) or 25)) * 1024 * 1024
+                    )
+                    native_plan = build_native_import_plan(
+                        db,
+                        run=run,
+                        subject_id=int(sid),
+                        import_storage_root=import_storage_root,
+                        max_upload_bytes=max_upload_bytes,
                     )
                     preview_native_backup_import(
                         db,
@@ -14224,6 +14234,7 @@ def create_app() -> FastAPI:
                         subject_id=int(sid),
                         import_storage_root=import_storage_root,
                         max_upload_bytes=max_upload_bytes,
+                        plan=native_plan,
                     )
                 except Exception as exc:
                     try:
@@ -14249,6 +14260,7 @@ def create_app() -> FastAPI:
                     .where(ImportRun.subject_id == int(sid))
                     .where(ImportRun.status.in_(("uploaded", "error")))
                     .values(status="running", finished_at=None)
+                    .execution_options(synchronize_session=False)
                 )
                 db.commit()
                 if int(getattr(claim, "rowcount", 0) or 0) != 1:
@@ -14269,6 +14281,7 @@ def create_app() -> FastAPI:
                         subject_id=int(sid),
                         import_storage_root=import_storage_root,
                         max_upload_bytes=max_upload_bytes,
+                        plan=native_plan,
                     )
                 else:
                     from fakturek.fakturoid_import import process_import_run
@@ -14286,15 +14299,27 @@ def create_app() -> FastAPI:
                 db.commit()
                 return RedirectResponse(url=f"/imports/{int(run.id)}?processed=1", status_code=303)
             except Exception as exc:
-                # Best-effort error persistence.
+                # Do not commit partially flushed business rows while recording
+                # an error. Reload the run only after the failed processing
+                # transaction has been rolled back.
+                db.rollback()
                 try:
                     from fakturek.fakturoid_import import summary_to_json
 
-                    run.status = "error"
-                    run.finished_at = utc_now()
-                    run.summary_json = summary_to_json({"phase": 25, "error": str(exc)})
-                    db.add(run)
-                    db.commit()
+                    failed_run = db.scalar(
+                        select(ImportRun)
+                        .where(ImportRun.id == int(run_id))
+                        .where(ImportRun.subject_id == int(sid))
+                        .limit(1)
+                    )
+                    if failed_run is not None:
+                        failed_run.status = "error"
+                        failed_run.finished_at = utc_now()
+                        failed_run.summary_json = summary_to_json(
+                            {"phase": 25, "error": str(exc)}
+                        )
+                        db.add(failed_run)
+                        db.commit()
                 except Exception:
                     db.rollback()
                 return RedirectResponse(url=f"/imports/{int(run.id)}?error=1", status_code=303)
