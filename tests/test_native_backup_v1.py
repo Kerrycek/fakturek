@@ -1,0 +1,329 @@
+from __future__ import annotations
+
+import hashlib
+import io
+import json
+import re
+import zipfile
+from decimal import Decimal
+from types import SimpleNamespace
+
+import pytest
+from starlette.testclient import TestClient
+
+sqlalchemy = pytest.importorskip("sqlalchemy")
+
+import fakturek.db as db_module
+from fakturek.db import Base
+from fakturek.settings import get_settings
+
+
+def _reset() -> None:
+    get_settings.cache_clear()
+    db_module._engine = None
+    db_module._SessionLocal = None
+
+
+def _setup(monkeypatch, tmp_path, *, csrf: bool = False):
+    monkeypatch.setenv("DATABASE_URL", f"sqlite+pysqlite:///{tmp_path / 'native.sqlite3'}")
+    monkeypatch.setenv("IMPORT_STORAGE_DIR", str(tmp_path / "imports"))
+    monkeypatch.setenv("AUTH_REQUIRED", "0")
+    monkeypatch.setenv("CSRF_ENABLED", "1" if csrf else "0")
+    monkeypatch.setenv("SECRET_KEY", "native-test-secret")
+    _reset()
+    from fakturek.db import get_engine, get_sessionmaker
+    from fakturek.main import create_app
+    from fakturek.models import Contact, InvoiceCatalogItem, Subject
+
+    Base.metadata.create_all(get_engine())
+    SessionLocal = get_sessionmaker()
+    with SessionLocal() as db:
+        db.add_all([Subject(id=1, name="Source"), Subject(id=2, name="Destination")])
+        db.add(
+            Contact(
+                subject_id=1,
+                name="Native customer",
+                email="customer@example.test",
+                phone="+420111222333",
+                street="Export 1",
+                city="Prague",
+                zip="11000",
+                country="CZ",
+                ico="12345678",
+                dic="CZ12345678",
+                fixed_variable_symbol="42",
+                registry_auto_update=False,
+                external_source="crm",
+                external_id="customer-7",
+                registry_last_error="never export this",
+                registry_data_hash="never export this either",
+            )
+        )
+        db.add(
+            InvoiceCatalogItem(
+                subject_id=1,
+                description="Native service",
+                quantity=Decimal("2.00"),
+                unit="hour",
+                unit_price_cents=12345,
+                vat_rate=Decimal("21.00"),
+                currency="CZK",
+            )
+        )
+        db.commit()
+    return TestClient(create_app()), SessionLocal, tmp_path / "imports"
+
+
+def _csrf(client: TestClient) -> str:
+    page = client.get("/imports")
+    match = re.search(r'name="csrf_token" value="([^"]+)"', page.text)
+    assert match
+    return match.group(1)
+
+
+def _upload(client: TestClient, payload: bytes, *, csrf_token: str = "") -> int:
+    response = client.post(
+        "/imports",
+        data={"source": "fakturek_native_v1", "csrf_token": csrf_token},
+        files={
+            "file": (
+                "native-backup.zip",
+                payload,
+                "application/vnd.fakturek.native-backup+zip",
+            )
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    return int(response.headers["location"].split("/")[2].split("?")[0])
+
+
+def _manifest_zip(*, contacts: bytes = b"", catalog: bytes = b"") -> bytes:
+    datasets = [
+        {
+            "name": "contacts",
+            "filename": "contacts.jsonl",
+            "schema_version": 1,
+            "row_count": contacts.count(b"\n"),
+            "sha256": hashlib.sha256(contacts).hexdigest(),
+        },
+        {
+            "name": "catalog_items",
+            "filename": "catalog_items.jsonl",
+            "schema_version": 1,
+            "row_count": catalog.count(b"\n"),
+            "sha256": hashlib.sha256(catalog).hexdigest(),
+        },
+    ]
+    manifest = {
+        "format": "fakturek-native-backup",
+        "version": 1,
+        "generated_at_utc": "2026-01-01T00:00:00Z",
+        "source_subject_id": 999999,
+        "datasets": datasets,
+    }
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as archive:
+        archive.writestr("manifest.json", json.dumps(manifest))
+        archive.writestr("contacts.jsonl", contacts)
+        archive.writestr("catalog_items.jsonl", catalog)
+    return out.getvalue()
+
+
+def test_native_backup_export_and_round_trip_are_scoped_and_idempotent(monkeypatch, tmp_path):
+    client, SessionLocal, _import_root = _setup(monkeypatch, tmp_path)
+    response = client.get("/exports/native-backup.zip")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/vnd.fakturek.native-backup+zip")
+    assert "attachment;" in response.headers["content-disposition"]
+
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        assert archive.namelist() == ["manifest.json", "contacts.jsonl", "catalog_items.jsonl"]
+        manifest = json.loads(archive.read("manifest.json"))
+        assert manifest["format"] == "fakturek-native-backup"
+        assert manifest["version"] == 1
+        assert manifest["source_subject_id"] == 1
+        for dataset in manifest["datasets"]:
+            content = archive.read(dataset["filename"])
+            assert dataset["row_count"] == content.count(b"\n")
+            assert dataset["sha256"] == hashlib.sha256(content).hexdigest()
+            assert dataset["schema_version"] == 1
+        contact = json.loads(archive.read("contacts.jsonl").splitlines()[0])
+        assert set(contact) <= {
+            "name",
+            "email",
+            "phone",
+            "street",
+            "city",
+            "zip",
+            "country",
+            "ico",
+            "dic",
+            "fixed_variable_symbol",
+            "registry_auto_update",
+            "external_source",
+            "external_id",
+        }
+        assert "registry_last_error" not in contact and "registry_data_hash" not in contact
+
+    run_id = _upload(client, response.content)
+    detail = client.get(f"/imports/{run_id}")
+    assert "Native backup v1" in detail.text
+    assert "verified" in detail.text
+    with SessionLocal() as db:
+        from fakturek.models import ImportRun
+        from fakturek.native_backup import process_native_backup_import
+
+        run = ImportRun(
+            subject_id=2,
+            source="fakturek_native_v1",
+            status="uploaded",
+            file_name="native-backup.zip",
+            file_sha256=hashlib.sha256(response.content).hexdigest(),
+            file_size_bytes=len(response.content),
+            mime_type="application/zip",
+        )
+        db.add(run)
+        db.flush()
+        stored = tmp_path / "imports" / f"subject-2/run-{run.id}.zip"
+        stored.parent.mkdir(parents=True, exist_ok=True)
+        stored.write_bytes(response.content)
+        run.file_path = stored.relative_to(tmp_path / "imports").as_posix()
+        db.flush()
+        process_native_backup_import(
+            db,
+            run=run,
+            subject_id=2,
+            import_storage_root=tmp_path / "imports",
+            max_upload_bytes=25 * 1024 * 1024,
+        )
+        process_native_backup_import(
+            db,
+            run=run,
+            subject_id=2,
+            import_storage_root=tmp_path / "imports",
+            max_upload_bytes=25 * 1024 * 1024,
+        )
+        db.commit()
+    with SessionLocal() as db:
+        from fakturek.models import Contact, ImportMap, InvoiceCatalogItem
+
+        assert db.query(Contact).filter_by(subject_id=2).count() == 1
+        assert db.query(InvoiceCatalogItem).filter_by(subject_id=2).count() == 1
+        assert db.query(Contact).filter_by(subject_id=1).count() == 1
+        assert db.query(ImportMap).filter_by(subject_id=2, source="fakturek_native_v1").count() == 2
+    _reset()
+
+
+@pytest.mark.parametrize(
+    "mutation", ["unknown", "duplicate", "traversal", "bad_hash", "bad_format", "bad_jsonl"]
+)
+def test_native_backup_rejects_unsafe_or_invalid_archives_before_processing(
+    monkeypatch, tmp_path, mutation
+):
+    client, SessionLocal, _import_root = _setup(monkeypatch, tmp_path)
+    contacts = b'{"name":"New customer"}\n'
+    payload = _manifest_zip(contacts=contacts)
+    with zipfile.ZipFile(io.BytesIO(payload)) as source:
+        members = {name: source.read(name) for name in source.namelist()}
+    if mutation == "bad_jsonl":
+        members["contacts.jsonl"] = b"{not json}\n"
+    if mutation in {"bad_hash", "bad_format"}:
+        manifest = json.loads(members["manifest.json"])
+        if mutation == "bad_hash":
+            manifest["datasets"][0]["sha256"] = "0" * 64
+        else:
+            manifest["format"] = "other"
+        members["manifest.json"] = json.dumps(manifest).encode()
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as archive:
+        for name, content in members.items():
+            archive.writestr(name, content)
+        if mutation == "unknown":
+            archive.writestr("surprise.txt", b"no")
+        if mutation == "duplicate":
+            archive.writestr("contacts.jsonl", contacts)
+        if mutation == "traversal":
+            archive.writestr("../contacts.jsonl", contacts)
+    run_id = _upload(client, out.getvalue())
+    detail = client.get(f"/imports/{run_id}")
+    assert "Preview selhalo" in detail.text
+    client.post(f"/imports/{run_id}/process", follow_redirects=False)
+    with SessionLocal() as db:
+        from fakturek.models import Contact
+
+        assert db.query(Contact).filter_by(subject_id=1).count() == 1
+    _reset()
+
+
+def test_native_backup_upload_and_process_require_csrf(monkeypatch, tmp_path):
+    client, _SessionLocal, _import_root = _setup(monkeypatch, tmp_path, csrf=True)
+    payload = _manifest_zip()
+    denied = client.post(
+        "/imports",
+        data={"source": "fakturek_native_v1"},
+        files={"file": ("backup.zip", payload, "application/zip")},
+    )
+    assert denied.status_code == 403
+    run_id = _upload(client, payload, csrf_token=_csrf(client))
+    denied_process = client.post(f"/imports/{run_id}/process", follow_redirects=False)
+    assert denied_process.status_code == 403
+    _reset()
+
+
+def test_native_backup_reuses_existing_contacts_and_catalog_items(monkeypatch, tmp_path):
+    _client, SessionLocal, import_root = _setup(monkeypatch, tmp_path)
+    contacts = b'{"name":"Native customer","email":"replacement@example.test"}\n'
+    catalog = (
+        b'{"description":"Native service","quantity":"2.00","unit":"hour",'
+        b'"unit_price_cents":12345,"vat_rate":"21.00","currency":"CZK"}\n'
+    )
+    payload = _manifest_zip(contacts=contacts, catalog=catalog)
+    stored = import_root / "conflict.zip"
+    stored.parent.mkdir(parents=True, exist_ok=True)
+    stored.write_bytes(payload)
+    run = SimpleNamespace(
+        subject_id=1,
+        file_path="conflict.zip",
+        file_sha256=hashlib.sha256(payload).hexdigest(),
+        summary_json=json.dumps({"config": {"contact_conflict_mode": "skip_existing"}}),
+    )
+    with SessionLocal() as db:
+        from fakturek.models import Contact, InvoiceCatalogItem
+        from fakturek.native_backup import process_native_backup_import
+
+        summary = process_native_backup_import(
+            db,
+            run=run,
+            subject_id=1,
+            import_storage_root=import_root,
+            max_upload_bytes=25 * 1024 * 1024,
+        )
+        db.commit()
+        contact = db.query(Contact).filter_by(subject_id=1, name="Native customer").one()
+        assert contact.email == "customer@example.test"
+        assert summary["contacts"]["skipped_existing"] == 1
+        assert summary["catalog_items"]["reused"] == 1
+        assert db.query(InvoiceCatalogItem).filter_by(subject_id=1).count() == 1
+    _reset()
+
+
+def test_native_backup_route_guard_rejects_hosted_shadowing(monkeypatch, tmp_path):
+    _client, _SessionLocal, _import_root = _setup(monkeypatch, tmp_path)
+    from fastapi import FastAPI
+
+    from fakturek.main import _assert_unique_export_import_routes
+
+    app = FastAPI()
+
+    @app.get("/exports/native-backup.zip")
+    def first_export():
+        return {"ok": True}
+
+    @app.get("/exports/native-backup.zip")
+    def shadow_export():
+        return {"ok": False}
+
+    with pytest.raises(RuntimeError, match="Duplicate export/import route"):
+        _assert_unique_export_import_routes(app)
+    _reset()
