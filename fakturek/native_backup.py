@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path, PurePosixPath
 from typing import Any
+from uuid import UUID, uuid4
 
 FORMAT = "fakturek-native-backup"
 VERSION = 1
@@ -48,6 +49,22 @@ class NativeBackup:
     manifest: dict[str, Any]
     contacts: list[dict[str, Any]]
     catalog_items: list[dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class NativeImportAction:
+    identity: str
+    row: dict[str, Any]
+    action: str
+    existing_id: int | None = None
+
+
+@dataclass(frozen=True)
+class NativeImportPlan:
+    backup: NativeBackup
+    contact_mode: str
+    contacts: list[NativeImportAction]
+    catalog_items: list[NativeImportAction]
 
 
 def _canonical_json(value: object) -> bytes:
@@ -188,10 +205,17 @@ def _catalog_export_row(item: object) -> dict[str, Any]:
 
 
 def build_native_backup_bytes(
-    *, contacts: list[object], catalog_items: list[object], subject_id: int
+    *,
+    contacts: list[object],
+    catalog_items: list[object],
+    max_rows: int = MAX_ROWS_PER_DATASET,
+    max_member_bytes: int,
+    max_archive_bytes: int,
 ) -> bytes:
     """Build the exact three-member v1 archive in deterministic row order."""
 
+    if len(contacts) > max_rows or len(catalog_items) > max_rows:
+        raise ValueError(f"Native backup supports at most {max_rows} rows per dataset")
     contact_rows = sorted(
         (_contact_export_row(row) for row in contacts), key=lambda row: _canonical_json(row)
     )
@@ -210,7 +234,7 @@ def build_native_backup_bytes(
         .replace(microsecond=0)
         .isoformat()
         .replace("+00:00", "Z"),
-        "source_subject_id": int(subject_id),
+        "export_id": str(uuid4()),
         "datasets": [
             {
                 "name": name,
@@ -223,13 +247,18 @@ def build_native_backup_bytes(
         ],
     }
     content["manifest.json"] = _canonical_json(manifest) + b"\n"
+    if any(len(value) > max_member_bytes for value in content.values()):
+        raise ValueError("Native backup dataset exceeds the configured import size limit")
     out = io.BytesIO()
     with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
         for filename in MEMBERS:
             info = zipfile.ZipInfo(filename, date_time=(1980, 1, 1, 0, 0, 0))
             info.compress_type = zipfile.ZIP_DEFLATED
             archive.writestr(info, content[filename])
-    return out.getvalue()
+    payload = out.getvalue()
+    if len(payload) > max_archive_bytes:
+        raise ValueError("Native backup exceeds the configured import upload size limit")
+    return payload
 
 
 def _safe_member_name(name: str) -> bool:
@@ -310,16 +339,19 @@ def parse_native_backup_bytes(
         "format",
         "version",
         "generated_at_utc",
-        "source_subject_id",
+        "export_id",
         "datasets",
     }:
         raise ValueError("backup manifest has an unsupported schema")
     if manifest.get("format") != FORMAT or manifest.get("version") != VERSION:
         raise ValueError("backup format or version is unsupported")
-    if not isinstance(manifest.get("source_subject_id"), int) or isinstance(
-        manifest.get("source_subject_id"), bool
-    ):
-        raise ValueError("backup manifest source_subject_id is invalid")
+    if not isinstance(manifest.get("export_id"), str):
+        raise ValueError("backup manifest export_id is invalid")
+    try:
+        if str(UUID(manifest["export_id"])) != manifest["export_id"]:
+            raise ValueError("backup manifest export_id is invalid")
+    except (ValueError, AttributeError) as exc:
+        raise ValueError("backup manifest export_id is invalid") from exc
     if not isinstance(manifest.get("generated_at_utc"), str):
         raise ValueError("backup manifest generated_at_utc is invalid")
     try:
@@ -396,7 +428,7 @@ def _validated_run_backup(
     )
 
 
-def preview_native_backup_import(
+def _legacy_preview_native_backup_import(
     db, *, run: object, subject_id: int, import_storage_root: Path, max_upload_bytes: int
 ) -> dict[str, Any]:
     """Return a complete validated preview without writing data."""
@@ -559,7 +591,7 @@ def _find_catalog_item(db, *, subject_id: int, row: dict[str, Any], lookup, sele
     )
 
 
-def process_native_backup_import(
+def _legacy_process_native_backup_import(
     db, *, run: object, subject_id: int, import_storage_root: Path, max_upload_bytes: int
 ) -> dict[str, Any]:
     """Validate first, then import the two v1 datasets transactionally."""
@@ -662,6 +694,365 @@ def process_native_backup_import(
             external_id=identity,
             internal_id=int(item.id),
         )
+    summary["note"] = (
+        f"contacts: +{summary['contacts']['created']}; "
+        f"catalog items: +{summary['catalog_items']['created']}"
+    )
+    return summary
+
+
+# ---------------------------------------------------------------------------
+# v1 planning and application.  These supersede the original helpers above.
+# ---------------------------------------------------------------------------
+
+
+def _snapshot_matches_contact(row: dict[str, Any], contacts: list[object]):
+    for existing in contacts:
+        if (
+            row.get("external_source")
+            and row.get("external_id")
+            and (
+                getattr(existing, "external_source", None) == row["external_source"]
+                and getattr(existing, "external_id", None) == row["external_id"]
+            )
+        ):
+            return existing
+    for field in ("ico", "email", "name"):
+        if row.get(field):
+            for existing in contacts:
+                if getattr(existing, field, None) == row[field]:
+                    return existing
+    return None
+
+
+def _snapshot_matches_catalog(row: dict[str, Any], items: list[object]):
+    signature = (
+        row["description"].casefold(),
+        Decimal(row["quantity"]),
+        row["unit"],
+        int(row["unit_price_cents"]),
+        Decimal(row["vat_rate"]),
+        row["currency"],
+    )
+    for existing in items:
+        candidate = (
+            str(getattr(existing, "description", "") or "").strip().casefold(),
+            Decimal(str(getattr(existing, "quantity", "0"))),
+            str(getattr(existing, "unit", "") or ""),
+            int(getattr(existing, "unit_price_cents", 0) or 0),
+            Decimal(str(getattr(existing, "vat_rate", "0"))),
+            str(getattr(existing, "currency", "") or ""),
+        )
+        if candidate == signature:
+            return existing
+    return None
+
+
+def build_native_import_plan(
+    db, *, run: object, subject_id: int, import_storage_root: Path, max_upload_bytes: int
+) -> NativeImportPlan:
+    """Validate and plan against one pre-existing tenant snapshot only."""
+
+    from sqlalchemy import select
+
+    from fakturek.importing import lookup_imported_id
+    from fakturek.models import Contact, InvoiceCatalogItem, Subject
+
+    if int(getattr(run, "subject_id", 0) or 0) != int(subject_id):
+        raise ValueError("Import run does not belong to the current subject")
+    if db.scalar(select(Subject.id).where(Subject.id == int(subject_id)).limit(1)) is None:
+        raise ValueError("Subject does not exist")
+    backup = _validated_run_backup(
+        run, import_storage_root=import_storage_root, max_upload_bytes=max_upload_bytes
+    )
+    contact_mode = _contact_mode(_run_config(run))
+    snapshot_contacts = list(
+        db.scalars(select(Contact).where(Contact.subject_id == int(subject_id))).all()
+    )
+    snapshot_catalog = list(
+        db.scalars(
+            select(InvoiceCatalogItem).where(InvoiceCatalogItem.subject_id == int(subject_id))
+        ).all()
+    )
+    contact_by_id = {int(item.id): item for item in snapshot_contacts}
+    catalog_by_id = {int(item.id): item for item in snapshot_catalog}
+
+    def _actions(
+        rows, *, entity_type: str, snapshot: list[object], by_id: dict[int, object], matcher
+    ):
+        actions: list[NativeImportAction] = []
+        seen_identities: set[str] = set()
+        for row in rows:
+            identity = row_identity(row)
+            if identity in seen_identities:
+                actions.append(NativeImportAction(identity=identity, row=row, action="reuse"))
+                continue
+            seen_identities.add(identity)
+            mapped_id = lookup_imported_id(
+                db,
+                subject_id=int(subject_id),
+                source=SOURCE,
+                entity_type=entity_type,
+                external_id=identity,
+            )
+            existing = by_id.get(int(mapped_id)) if mapped_id is not None else None
+            if existing is None and (entity_type != "contact" or contact_mode != "create_new"):
+                existing = matcher(row, snapshot)
+            actions.append(
+                NativeImportAction(
+                    identity=identity,
+                    row=row,
+                    action="reuse" if existing is not None else "create",
+                    existing_id=int(existing.id) if existing is not None else None,
+                )
+            )
+        return actions
+
+    return NativeImportPlan(
+        backup=backup,
+        contact_mode=contact_mode,
+        contacts=_actions(
+            backup.contacts,
+            entity_type="contact",
+            snapshot=snapshot_contacts,
+            by_id=contact_by_id,
+            matcher=_snapshot_matches_contact,
+        ),
+        catalog_items=_actions(
+            backup.catalog_items,
+            entity_type="catalog_item",
+            snapshot=snapshot_catalog,
+            by_id=catalog_by_id,
+            matcher=_snapshot_matches_catalog,
+        ),
+    )
+
+
+def _preview_from_plan(plan: NativeImportPlan) -> dict[str, Any]:
+    contacts = {"parsed": len(plan.contacts), "will_create": 0, "will_reuse": 0, "will_skip": 0}
+    catalog = {"parsed": len(plan.catalog_items), "will_create": 0, "will_reuse": 0}
+    for action in plan.contacts:
+        contacts[f"will_{action.action}"] += 1
+        if (
+            action.action == "reuse"
+            and action.existing_id is not None
+            and plan.contact_mode == "skip_existing"
+        ):
+            contacts["will_skip"] += 1
+    for action in plan.catalog_items:
+        catalog[f"will_{action.action}"] += 1
+    return {
+        "native_backup": True,
+        "source": SOURCE,
+        "ready_note": (
+            "The ZIP was fully validated. Processing imports contacts and catalog items only."
+        ),
+        "manifest": plan.backup.manifest,
+        "datasets": {
+            "contacts": {"row_count": len(plan.contacts), "checksum": "verified"},
+            "catalog_items": {"row_count": len(plan.catalog_items), "checksum": "verified"},
+        },
+        "contacts": contacts,
+        "catalog_items": catalog,
+        "invoices": {
+            "will_import": 0,
+            "already_imported": 0,
+            "number_conflicts": 0,
+            "will_renumber": 0,
+            "will_create_contacts": 0,
+            "will_reuse_contacts": 0,
+            "warnings": [],
+            "errors": [],
+        },
+    }
+
+
+def preview_native_backup_import(
+    db, *, run: object, subject_id: int, import_storage_root: Path, max_upload_bytes: int
+) -> dict[str, Any]:
+    return _preview_from_plan(
+        build_native_import_plan(
+            db,
+            run=run,
+            subject_id=subject_id,
+            import_storage_root=import_storage_root,
+            max_upload_bytes=max_upload_bytes,
+        )
+    )
+
+
+def _bind_map_to_canonical_entity(
+    db, *, subject_id: int, entity_type: str, identity: str, entity, model
+):
+    """Return the ImportMap winner and delete any speculative losing row."""
+
+    from sqlalchemy import select
+
+    from fakturek.importing import ensure_import_map, lookup_imported_id
+
+    ensure_import_map(
+        db,
+        subject_id=int(subject_id),
+        source=SOURCE,
+        entity_type=entity_type,
+        external_id=identity,
+        internal_id=int(entity.id),
+    )
+    mapped_id = lookup_imported_id(
+        db,
+        subject_id=int(subject_id),
+        source=SOURCE,
+        entity_type=entity_type,
+        external_id=identity,
+    )
+    if mapped_id == int(entity.id):
+        return entity, False
+    db.delete(entity)
+    db.flush()
+    winner = db.scalar(
+        select(model)
+        .where(model.subject_id == int(subject_id))
+        .where(model.id == int(mapped_id))
+        .limit(1)
+    )
+    if winner is None:
+        raise ValueError("Native backup mapping points to an unavailable record")
+    return winner, True
+
+
+def process_native_backup_import(
+    db, *, run: object, subject_id: int, import_storage_root: Path, max_upload_bytes: int
+) -> dict[str, Any]:
+    """Build one plan, then apply exactly that plan without fuzzy re-matching."""
+
+    from sqlalchemy import select
+
+    from fakturek.models import Contact, InvoiceCatalogItem
+
+    plan = build_native_import_plan(
+        db,
+        run=run,
+        subject_id=subject_id,
+        import_storage_root=import_storage_root,
+        max_upload_bytes=max_upload_bytes,
+    )
+    summary: dict[str, Any] = {
+        "phase": "native_backup_v1",
+        "source": SOURCE,
+        "backup": {
+            "version": VERSION,
+            "datasets": plan.backup.manifest["datasets"],
+            "checksum_state": "verified",
+        },
+        "config": {"contact_conflict_mode": plan.contact_mode},
+        "contacts": {
+            "parsed": len(plan.contacts),
+            "created": 0,
+            "reused": 0,
+            "skipped_existing": 0,
+        },
+        "catalog_items": {"parsed": len(plan.catalog_items), "created": 0, "reused": 0},
+    }
+    resolved_contacts: dict[str, object] = {}
+    for action in plan.contacts:
+        contact = resolved_contacts.get(action.identity)
+        if contact is not None:
+            summary["contacts"]["reused"] += 1
+            continue
+        if action.action == "reuse":
+            contact = db.scalar(
+                select(Contact)
+                .where(Contact.subject_id == int(subject_id))
+                .where(Contact.id == action.existing_id)
+                .limit(1)
+            )
+            if contact is None:
+                raise ValueError("Native backup contact changed during processing")
+            summary["contacts"]["reused"] += 1
+            if plan.contact_mode == "skip_existing":
+                summary["contacts"]["skipped_existing"] += 1
+            elif plan.contact_mode == "merge_existing":
+                for field in CONTACT_FIELDS[1:]:
+                    if field == "registry_auto_update":
+                        continue
+                    if action.row.get(field) is not None and not getattr(contact, field, None):
+                        setattr(contact, field, action.row[field])
+                db.add(contact)
+        else:
+            contact = Contact(subject_id=int(subject_id), name=action.row["name"])
+            for field in CONTACT_FIELDS[1:]:
+                if field in action.row:
+                    setattr(contact, field, action.row[field])
+            db.add(contact)
+            db.flush()
+            contact, lost_race = _bind_map_to_canonical_entity(
+                db,
+                subject_id=subject_id,
+                entity_type="contact",
+                identity=action.identity,
+                entity=contact,
+                model=Contact,
+            )
+            summary["contacts"]["reused" if lost_race else "created"] += 1
+        resolved_contacts[action.identity] = contact
+        if action.action == "reuse":
+            _bind_map_to_canonical_entity(
+                db,
+                subject_id=subject_id,
+                entity_type="contact",
+                identity=action.identity,
+                entity=contact,
+                model=Contact,
+            )
+
+    resolved_catalog: dict[str, object] = {}
+    for action in plan.catalog_items:
+        item = resolved_catalog.get(action.identity)
+        if item is not None:
+            summary["catalog_items"]["reused"] += 1
+            continue
+        if action.action == "reuse":
+            item = db.scalar(
+                select(InvoiceCatalogItem)
+                .where(InvoiceCatalogItem.subject_id == int(subject_id))
+                .where(InvoiceCatalogItem.id == action.existing_id)
+                .limit(1)
+            )
+            if item is None:
+                raise ValueError("Native backup catalog item changed during processing")
+            summary["catalog_items"]["reused"] += 1
+        else:
+            item = InvoiceCatalogItem(
+                subject_id=int(subject_id),
+                description=action.row["description"],
+                quantity=Decimal(action.row["quantity"]),
+                unit=action.row["unit"],
+                unit_price_cents=int(action.row["unit_price_cents"]),
+                vat_rate=Decimal(action.row["vat_rate"]),
+                currency=action.row["currency"],
+            )
+            db.add(item)
+            db.flush()
+            item, lost_race = _bind_map_to_canonical_entity(
+                db,
+                subject_id=subject_id,
+                entity_type="catalog_item",
+                identity=action.identity,
+                entity=item,
+                model=InvoiceCatalogItem,
+            )
+            summary["catalog_items"]["reused" if lost_race else "created"] += 1
+        resolved_catalog[action.identity] = item
+        if action.action == "reuse":
+            _bind_map_to_canonical_entity(
+                db,
+                subject_id=subject_id,
+                entity_type="catalog_item",
+                identity=action.identity,
+                entity=item,
+                model=InvoiceCatalogItem,
+            )
+
     summary["note"] = (
         f"contacts: +{summary['contacts']['created']}; "
         f"catalog items: +{summary['catalog_items']['created']}"

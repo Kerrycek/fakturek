@@ -123,6 +123,7 @@ from fakturek.export_formats import (
     build_pohoda_invoice_export_bytes,
 )
 from fakturek.native_backup import (
+    MAX_ROWS_PER_DATASET as NATIVE_BACKUP_MAX_ROWS,
     MEDIA_TYPE as NATIVE_BACKUP_MEDIA_TYPE,
     SOURCE as NATIVE_BACKUP_SOURCE,
     build_native_backup_bytes,
@@ -2948,7 +2949,7 @@ def create_app() -> FastAPI:
     # CI sandboxes) may not have the DB stack installed. To keep the app importable
     # and the basic healthcheck usable, we load DB-related dependencies lazily.
     try:  # pragma: no cover (covered in integration/DB tests, not unit tests)
-        from sqlalchemy import case, func, or_, select
+        from sqlalchemy import case, func, or_, select, update
         from sqlalchemy.exc import SQLAlchemyError
         from sqlalchemy.orm import Session, selectinload
 
@@ -13529,16 +13530,30 @@ def create_app() -> FastAPI:
                     select(Contact)
                     .where(Contact.subject_id == int(sid))
                     .order_by(Contact.name.asc(), Contact.id.asc())
+                    .limit(NATIVE_BACKUP_MAX_ROWS + 1)
                 ).all()
                 catalog_items = db.scalars(
                     select(InvoiceCatalogItem)
                     .where(InvoiceCatalogItem.subject_id == int(sid))
                     .order_by(InvoiceCatalogItem.description.asc(), InvoiceCatalogItem.id.asc())
+                    .limit(NATIVE_BACKUP_MAX_ROWS + 1)
                 ).all()
-                payload = build_native_backup_bytes(
-                    contacts=list(contacts), catalog_items=list(catalog_items), subject_id=int(sid)
+                max_upload_bytes = (
+                    max(1, int(getattr(settings, "import_max_upload_mb", 25) or 25)) * 1024 * 1024
                 )
-            except (SQLAlchemyError, ValueError) as exc:  # type: ignore[misc]
+                payload = build_native_backup_bytes(
+                    contacts=list(contacts),
+                    catalog_items=list(catalog_items),
+                    max_rows=NATIVE_BACKUP_MAX_ROWS,
+                    max_member_bytes=max_upload_bytes,
+                    max_archive_bytes=max_upload_bytes,
+                )
+            except ValueError as exc:
+                return HTMLResponse(
+                    content=f"<h1>Native backup nelze vytvořit</h1><p>{escape(str(exc))}</p>",
+                    status_code=413,
+                )
+            except SQLAlchemyError as exc:  # type: ignore[misc]
                 return _render_db_disabled(request, title="Native backup", db_error=str(exc), status_code=500)
             return Response(
                 content=payload,
@@ -14225,12 +14240,20 @@ def create_app() -> FastAPI:
                         db.rollback()
                     return RedirectResponse(url=f"/imports/{int(run.id)}?error=1", status_code=303)
 
-            # Mark as running.
+            # Atomically claim the run.  A second browser/tab must not start a
+            # second importer after the first request has already validated it.
             try:
-                run.status = "running"
-                run.finished_at = None
-                db.add(run)
+                claim = db.execute(
+                    update(ImportRun)
+                    .where(ImportRun.id == int(run.id))
+                    .where(ImportRun.subject_id == int(sid))
+                    .where(ImportRun.status.in_(("uploaded", "error")))
+                    .values(status="running", finished_at=None)
+                )
                 db.commit()
+                if int(getattr(claim, "rowcount", 0) or 0) != 1:
+                    return RedirectResponse(url=f"/imports/{int(run.id)}?duplicate=1", status_code=303)
+                db.refresh(run)
             except SQLAlchemyError as exc:  # type: ignore[misc]
                 db.rollback()
                 return _render_db_disabled(request, title="Export/Import", db_error=str(exc))

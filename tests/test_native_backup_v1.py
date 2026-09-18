@@ -4,9 +4,11 @@ import hashlib
 import io
 import json
 import re
+import threading
 import zipfile
 from decimal import Decimal
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from starlette.testclient import TestClient
@@ -119,7 +121,7 @@ def _manifest_zip(*, contacts: bytes = b"", catalog: bytes = b"") -> bytes:
         "format": "fakturek-native-backup",
         "version": 1,
         "generated_at_utc": "2026-01-01T00:00:00Z",
-        "source_subject_id": 999999,
+        "export_id": str(uuid4()),
         "datasets": datasets,
     }
     out = io.BytesIO()
@@ -142,7 +144,9 @@ def test_native_backup_export_and_round_trip_are_scoped_and_idempotent(monkeypat
         manifest = json.loads(archive.read("manifest.json"))
         assert manifest["format"] == "fakturek-native-backup"
         assert manifest["version"] == 1
-        assert manifest["source_subject_id"] == 1
+        assert "source_subject_id" not in manifest
+        assert manifest["export_id"]
+        assert '"source_subject_id"' not in archive.read("manifest.json").decode("utf-8")
         for dataset in manifest["datasets"]:
             content = archive.read(dataset["filename"])
             assert dataset["row_count"] == content.count(b"\n")
@@ -305,6 +309,140 @@ def test_native_backup_reuses_existing_contacts_and_catalog_items(monkeypatch, t
         assert summary["contacts"]["skipped_existing"] == 1
         assert summary["catalog_items"]["reused"] == 1
         assert db.query(InvoiceCatalogItem).filter_by(subject_id=1).count() == 1
+    _reset()
+
+
+def test_native_backup_plan_preserves_distinct_same_name_contacts(monkeypatch, tmp_path):
+    _client, SessionLocal, import_root = _setup(monkeypatch, tmp_path)
+    contacts = (
+        b'{"name":"Same name","email":"first@example.test"}\n'
+        b'{"name":"Same name","email":"second@example.test"}\n'
+    )
+    payload = _manifest_zip(contacts=contacts)
+    stored = import_root / "two-same-names.zip"
+    stored.parent.mkdir(parents=True, exist_ok=True)
+    stored.write_bytes(payload)
+    run = SimpleNamespace(
+        subject_id=2,
+        file_path="two-same-names.zip",
+        file_sha256=hashlib.sha256(payload).hexdigest(),
+        summary_json=json.dumps({"config": {"contact_conflict_mode": "merge_existing"}}),
+    )
+    with SessionLocal() as db:
+        from fakturek.models import Contact
+        from fakturek.native_backup import (
+            preview_native_backup_import,
+            process_native_backup_import,
+        )
+
+        preview = preview_native_backup_import(
+            db,
+            run=run,
+            subject_id=2,
+            import_storage_root=import_root,
+            max_upload_bytes=25 * 1024 * 1024,
+        )
+        summary = process_native_backup_import(
+            db,
+            run=run,
+            subject_id=2,
+            import_storage_root=import_root,
+            max_upload_bytes=25 * 1024 * 1024,
+        )
+        db.commit()
+        assert preview["contacts"]["will_create"] == summary["contacts"]["created"] == 2
+        assert preview["contacts"]["will_reuse"] == summary["contacts"]["reused"] == 0
+        assert {
+            row.email
+            for row in db.query(Contact).filter_by(subject_id=2).order_by(Contact.email).all()
+        } == {"first@example.test", "second@example.test"}
+    _reset()
+
+
+def test_native_backup_export_limits_are_import_compatible():
+    from fakturek.native_backup import build_native_backup_bytes
+
+    contact = SimpleNamespace(name="Limit", registry_auto_update=True)
+    payload = build_native_backup_bytes(
+        contacts=[contact],
+        catalog_items=[],
+        max_rows=1,
+        max_member_bytes=10_000,
+        max_archive_bytes=10_000,
+    )
+    assert payload.startswith(b"PK")
+    with pytest.raises(ValueError, match="at most 1 rows"):
+        build_native_backup_bytes(
+            contacts=[contact, contact],
+            catalog_items=[],
+            max_rows=1,
+            max_member_bytes=10_000,
+            max_archive_bytes=10_000,
+        )
+    with pytest.raises(ValueError, match="upload size limit"):
+        build_native_backup_bytes(
+            contacts=[contact],
+            catalog_items=[],
+            max_rows=1,
+            max_member_bytes=10_000,
+            max_archive_bytes=1,
+        )
+
+
+def test_native_backup_process_claim_allows_only_one_concurrent_application(monkeypatch, tmp_path):
+    client, SessionLocal, _import_root = _setup(monkeypatch, tmp_path)
+    contacts = b'{"name":"Concurrent customer","email":"concurrent@example.test"}\n'
+    catalog = (
+        b'{"description":"Concurrent catalog","quantity":"1.00","unit":"piece",'
+        b'"unit_price_cents":100,"vat_rate":"0.00","currency":"CZK"}\n'
+    )
+    run_id = _upload(client, _manifest_zip(contacts=contacts, catalog=catalog))
+    import fakturek.main as main_module
+
+    original = main_module.process_native_backup_import
+    started = threading.Event()
+    release = threading.Event()
+    calls = 0
+    calls_lock = threading.Lock()
+
+    def delayed_process(*args, **kwargs):
+        nonlocal calls
+        with calls_lock:
+            calls += 1
+        started.set()
+        assert release.wait(timeout=5)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(main_module, "process_native_backup_import", delayed_process)
+    responses: list[int] = []
+
+    def submit():
+        with TestClient(client.app) as concurrent_client:
+            response = concurrent_client.post(f"/imports/{run_id}/process", follow_redirects=False)
+            responses.append(response.status_code)
+
+    first = threading.Thread(target=submit)
+    first.start()
+    assert started.wait(timeout=5)
+    second = threading.Thread(target=submit)
+    second.start()
+    second.join(timeout=5)
+    release.set()
+    first.join(timeout=5)
+    assert not first.is_alive() and not second.is_alive()
+    assert calls == 1
+    assert responses == [303, 303]
+    with SessionLocal() as db:
+        from fakturek.models import Contact, ImportMap, InvoiceCatalogItem
+
+        assert db.query(Contact).filter_by(subject_id=1, name="Concurrent customer").count() == 1
+        assert (
+            db.query(InvoiceCatalogItem)
+            .filter_by(subject_id=1, description="Concurrent catalog")
+            .count()
+            == 1
+        )
+        assert db.query(ImportMap).filter_by(subject_id=1, source="fakturek_native_v1").count() == 2
     _reset()
 
 
