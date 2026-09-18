@@ -59,6 +59,39 @@
     {% endif %}
 
     {% if preview %}
+      {% if preview.native_backup %}
+        <div class="card stack-md">
+          <div class="section-heading">
+            <p class="page-kicker">Native backup v{{ preview.manifest.version }}</p>
+            <h2>Ověřený obsah zálohy</h2>
+          </div>
+          <p class="muted"><small>{{ preview.ready_note }}</small></p>
+          <div class="stats-grid">
+            <article class="stat-card"><span class="stat-label">Kontakty</span><strong class="stat-value">{{ preview.contacts.parsed }}</strong></article>
+            <article class="stat-card"><span class="stat-label">Kontakty nové</span><strong class="stat-value">{{ preview.contacts.will_create }}</strong></article>
+            <article class="stat-card"><span class="stat-label">Katalogové položky</span><strong class="stat-value">{{ preview.catalog_items.parsed }}</strong></article>
+            <article class="stat-card"><span class="stat-label">Položky nové</span><strong class="stat-value">{{ preview.catalog_items.will_create }}</strong></article>
+          </div>
+          <div class="table-wrap"><table class="table"><tbody>
+            <tr><th>Kontakty checksum</th><td>{{ preview.datasets.contacts.checksum }}</td></tr>
+            <tr><th>Katalog checksum</th><td>{{ preview.datasets.catalog_items.checksum }}</td></tr>
+            <tr><th>Zdrojový subjekt</th><td>Jen informativní — importuje se do aktuálního subjektu.</td></tr>
+          </tbody></table></div>
+          <form method="post" action="/imports/{{ run.id }}/config" class="form stack-sm">
+            {{ csrf_input(request)|safe }}
+            <div class="field">
+              <label for="contact_conflict_mode">Konflikt kontaktu</label>
+              {% set active_contact_conflict_mode = (config.contact_conflict_mode if config and config.contact_conflict_mode else 'merge_existing') %}
+              <select id="contact_conflict_mode" name="contact_conflict_mode">
+                {% for value, label in (contact_conflict_options or []) %}
+                  <option value="{{ value }}" {% if active_contact_conflict_mode == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="form-actions"><button class="btn" type="submit">Uložit pravidlo pro kontakty</button></div>
+          </form>
+        </div>
+      {% else %}
       <div class="card stack-md">
         <div class="section-heading">
           <p class="page-kicker">Preview</p>
@@ -223,6 +256,7 @@
             </div>
           {% endif %}
         </div>
+      {% endif %}
       {% endif %}
     {% endif %}
 
