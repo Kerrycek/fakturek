@@ -131,6 +131,14 @@ from fakturek.native_backup import (
     preview_native_backup_import,
     process_native_backup_import,
 )
+from fakturek.catalog_csv import (
+    MAX_ROWS as CATALOG_CSV_MAX_ROWS,
+    SOURCE as CATALOG_CSV_SOURCE,
+    build_catalog_csv_bytes,
+    build_catalog_csv_import_plan,
+    preview_catalog_csv_import,
+    process_catalog_csv_import,
+)
 from fakturek.isdoc import build_isdoc_bytes
 from fakturek.public_links import (
     PUBLIC_USERNAME_RE,
@@ -444,6 +452,7 @@ def create_app() -> FastAPI:
             "/invoices/export.csv",
             "/exports/data.zip",
             "/exports/invoices",
+            "/exports/catalog-items.csv",
             "/exports/native-backup.zip",
         }:
             return True
@@ -2951,7 +2960,7 @@ def create_app() -> FastAPI:
     # and the basic healthcheck usable, we load DB-related dependencies lazily.
     try:  # pragma: no cover (covered in integration/DB tests, not unit tests)
         from sqlalchemy import case, func, or_, select, update
-        from sqlalchemy.exc import SQLAlchemyError
+        from sqlalchemy.exc import IntegrityError, SQLAlchemyError
         from sqlalchemy.orm import Session, selectinload
 
         from fakturek.db import db_ping, get_db, get_engine
@@ -13521,6 +13530,48 @@ def create_app() -> FastAPI:
         return out.getvalue()
 
     if _db_enabled:
+        @app.get("/exports/catalog-items.csv")
+        def export_catalog_csv(request: Request, db: Session = Depends(get_db)):
+            """Download the strict, tenant-scoped catalog CSV v1 file."""
+
+            sid = _current_subject_id()
+            try:
+                catalog_items = db.scalars(
+                    select(InvoiceCatalogItem)
+                    .where(InvoiceCatalogItem.subject_id == int(sid))
+                    .order_by(InvoiceCatalogItem.id.asc())
+                    .limit(CATALOG_CSV_MAX_ROWS + 1)
+                ).all()
+                if len(catalog_items) > CATALOG_CSV_MAX_ROWS:
+                    return HTMLResponse(
+                        content="<h1>Katalog CSV nelze vytvořit</h1><p>Export překračuje povolený počet řádků.</p>",
+                        status_code=413,
+                    )
+                payload = build_catalog_csv_bytes(
+                    catalog_items=list(catalog_items), max_rows=CATALOG_CSV_MAX_ROWS
+                )
+                max_export_bytes = (
+                    max(1, int(getattr(settings, "import_max_upload_mb", 25) or 25)) * 1024 * 1024
+                )
+                if len(payload) > max_export_bytes:
+                    return HTMLResponse(
+                        content="<h1>Katalog CSV nelze vytvořit</h1><p>Export překračuje povolenou velikost souboru.</p>",
+                        status_code=413,
+                    )
+            except ValueError:
+                # Do not expose stored catalog values or filesystem information.
+                return HTMLResponse(
+                    content="<h1>Katalog CSV nelze vytvořit</h1><p>Data katalogu nejsou platná pro CSV v1.</p>",
+                    status_code=422,
+                )
+            except SQLAlchemyError as exc:  # type: ignore[misc]
+                return _render_db_disabled(request, title="Katalog CSV", db_error=str(exc), status_code=500)
+            return Response(
+                content=payload,
+                media_type="text/csv; charset=utf-8",
+                headers={"Content-Disposition": _attachment_disposition("fakturek-catalog-items-v1.csv")},
+            )
+
         @app.get("/exports/native-backup.zip")
         def export_native_backup(request: Request, db: Session = Depends(get_db)):
             """Export only the safe, portable native v1 backup datasets."""
@@ -13797,6 +13848,10 @@ def create_app() -> FastAPI:
 
             return _render_export_error("Vybraný formát exportu zatím neumím zpracovat.")
     else:
+        @app.get("/exports/catalog-items.csv")
+        def export_catalog_csv_disabled(request: Request):
+            return _render_db_disabled(request, title="Katalog CSV")
+
         @app.get("/exports/native-backup.zip")
         def export_native_backup_disabled(request: Request):
             return _render_db_disabled(request, title="Native backup")
@@ -13814,6 +13869,12 @@ def create_app() -> FastAPI:
     # ------------------------------------------------------------------
 
     IMPORT_SOURCE_OPTIONS: list[dict[str, str]] = [
+        {
+            "value": CATALOG_CSV_SOURCE,
+            "label": "Fakturek katalog CSV v1",
+            "description": "Přenos katalogových položek. Existující přesné položky znovu použije, nikdy je nepřepíše.",
+            "accept": ".csv,text/csv",
+        },
         {
             "value": NATIVE_BACKUP_SOURCE,
             "label": "Fakturek native backup v1",
@@ -14054,16 +14115,26 @@ def create_app() -> FastAPI:
                     status_code=400,
                 )
 
-            # File-level idempotence: reuse existing run with the same SHA256 (same subject + source).
+            is_catalog_csv_upload = str(source) == CATALOG_CSV_SOURCE
+            upload_dedupe_key = str(sha256_hex) if is_catalog_csv_upload else None
+            # File-level idempotence: catalog CSV additionally has a database
+            # uniqueness claim so two simultaneous uploads cannot create two
+            # runs after both requests observed no predecessor.
             try:
-                existing = db.scalar(
+                existing_query = (
                     select(ImportRun)
                     .where(ImportRun.subject_id == int(sid))
                     .where(ImportRun.source == str(source))
-                    .where(ImportRun.file_sha256 == str(sha256_hex))
                     .order_by(ImportRun.id.desc())
                     .limit(1)
                 )
+                if is_catalog_csv_upload:
+                    existing_query = existing_query.where(
+                        ImportRun.upload_dedupe_key == upload_dedupe_key
+                    )
+                else:
+                    existing_query = existing_query.where(ImportRun.file_sha256 == str(sha256_hex))
+                existing = db.scalar(existing_query)
             except SQLAlchemyError as exc:  # type: ignore[misc]
                 try:
                     tmp_path.unlink(missing_ok=True)  # type: ignore[arg-type]
@@ -14085,6 +14156,7 @@ def create_app() -> FastAPI:
                 status="uploaded",
                 file_name=str(getattr(upload, "filename", "") or ""),
                 file_sha256=str(sha256_hex),
+                upload_dedupe_key=upload_dedupe_key,
                 file_size_bytes=int(size_bytes),
                 mime_type=str(getattr(upload, "content_type", "") or ""),
                 summary_json=json.dumps(
@@ -14098,6 +14170,47 @@ def create_app() -> FastAPI:
 
             try:
                 db.flush()
+            except IntegrityError:
+                db.rollback()
+                try:
+                    tmp_path.unlink(missing_ok=True)  # type: ignore[arg-type]
+                except Exception:
+                    pass
+                try:
+                    winner = db.scalar(
+                        select(ImportRun)
+                        .where(ImportRun.subject_id == int(sid))
+                        .where(ImportRun.source == CATALOG_CSV_SOURCE)
+                        .where(ImportRun.upload_dedupe_key == str(sha256_hex))
+                        .order_by(ImportRun.id.desc())
+                        .limit(1)
+                    )
+                except SQLAlchemyError as exc:  # type: ignore[misc]
+                    return _render_db_disabled(request, title="Export/Import", db_error=str(exc), status_code=503)
+                if winner is not None:
+                    return RedirectResponse(url=f"/imports/{int(winner.id)}?duplicate=1", status_code=303)
+                return templates.TemplateResponse(
+                    request,
+                    "imports/list.html",
+                    {
+                        "db_enabled": True,
+                        "can_export": _current_request_can_export_subject(db, request=request, subject_id=int(sid)),
+                        "notice": None,
+                        "error": "Nepodařilo se uložit soubor.",
+                        "runs": [],
+                        "prefill": {"source": source},
+                        "export_prefill": _default_invoice_export_prefill(),
+                        "export_contact_options": [],
+                        "export_format_options": INVOICE_EXPORT_FORMAT_OPTIONS,
+                        "invoice_status_options": INVOICE_EXPORT_STATUS_OPTIONS,
+                        "invoice_document_type_options": INVOICE_DOCUMENT_TYPE_OPTIONS,
+                        "import_source_options": _import_source_options(),
+                        "max_upload_mb": max_mb,
+                        "import_storage_dir": str(getattr(settings, "import_storage_dir", "var/imports") or "var/imports"),
+                    },
+                    status_code=409,
+                )
+            try:
                 relpath = _import_file_relpath(
                     subject_id=int(sid),
                     run_id=int(run.id),
@@ -14212,8 +14325,12 @@ def create_app() -> FastAPI:
             is_native_backup = (
                 str(getattr(run, "source", "") or "").strip().lower() == NATIVE_BACKUP_SOURCE
             )
+            is_catalog_csv = (
+                str(getattr(run, "source", "") or "").strip().lower() == CATALOG_CSV_SOURCE
+            )
             native_plan = None
-            if is_native_backup:
+            catalog_csv_plan = None
+            if is_native_backup or is_catalog_csv:
                 # Validate every native member before changing even the run state.
                 # Apply this exact immutable plan after the atomic run claim so
                 # preview and processing cannot disagree about earlier rows.
@@ -14221,21 +14338,38 @@ def create_app() -> FastAPI:
                     max_upload_bytes = (
                         max(1, int(getattr(settings, "import_max_upload_mb", 25) or 25)) * 1024 * 1024
                     )
-                    native_plan = build_native_import_plan(
-                        db,
-                        run=run,
-                        subject_id=int(sid),
-                        import_storage_root=import_storage_root,
-                        max_upload_bytes=max_upload_bytes,
-                    )
-                    preview_native_backup_import(
-                        db,
-                        run=run,
-                        subject_id=int(sid),
-                        import_storage_root=import_storage_root,
-                        max_upload_bytes=max_upload_bytes,
-                        plan=native_plan,
-                    )
+                    if is_native_backup:
+                        native_plan = build_native_import_plan(
+                            db,
+                            run=run,
+                            subject_id=int(sid),
+                            import_storage_root=import_storage_root,
+                            max_upload_bytes=max_upload_bytes,
+                        )
+                        preview_native_backup_import(
+                            db,
+                            run=run,
+                            subject_id=int(sid),
+                            import_storage_root=import_storage_root,
+                            max_upload_bytes=max_upload_bytes,
+                            plan=native_plan,
+                        )
+                    else:
+                        catalog_csv_plan = build_catalog_csv_import_plan(
+                            db,
+                            run=run,
+                            subject_id=int(sid),
+                            import_storage_root=import_storage_root,
+                            max_upload_bytes=max_upload_bytes,
+                        )
+                        preview_catalog_csv_import(
+                            db,
+                            run=run,
+                            subject_id=int(sid),
+                            import_storage_root=import_storage_root,
+                            max_upload_bytes=max_upload_bytes,
+                            plan=catalog_csv_plan,
+                        )
                 except Exception as exc:
                     try:
                         from fakturek.fakturoid_import import summary_to_json
@@ -14243,7 +14377,12 @@ def create_app() -> FastAPI:
                         run.status = "error"
                         run.finished_at = utc_now()
                         run.summary_json = summary_to_json(
-                            {"phase": "native_backup_v1", "error": str(exc)}
+                            {
+                                "phase": "native_backup_v1" if is_native_backup else "catalog_csv_v1",
+                                "error": str(exc)
+                                if is_native_backup
+                                else "Catalog CSV is invalid or unavailable.",
+                            }
                         )
                         db.add(run)
                         db.commit()
@@ -14283,6 +14422,15 @@ def create_app() -> FastAPI:
                         max_upload_bytes=max_upload_bytes,
                         plan=native_plan,
                     )
+                elif is_catalog_csv:
+                    summary = process_catalog_csv_import(
+                        db,
+                        run=run,
+                        subject_id=int(sid),
+                        import_storage_root=import_storage_root,
+                        max_upload_bytes=max_upload_bytes,
+                        plan=catalog_csv_plan,
+                    )
                 else:
                     from fakturek.fakturoid_import import process_import_run
 
@@ -14316,7 +14464,12 @@ def create_app() -> FastAPI:
                         failed_run.status = "error"
                         failed_run.finished_at = utc_now()
                         failed_run.summary_json = summary_to_json(
-                            {"phase": 25, "error": str(exc)}
+                            {
+                                "phase": "catalog_csv_v1" if is_catalog_csv else 25,
+                                "error": "Catalog CSV processing failed."
+                                if is_catalog_csv
+                                else str(exc),
+                            }
                         )
                         db.add(failed_run)
                         db.commit()
@@ -14370,9 +14523,19 @@ def create_app() -> FastAPI:
 
             if str(getattr(run, "status", "") or "") in {"uploaded", "error"}:
                 try:
-                    if str(getattr(run, "source", "") or "").strip().lower() == NATIVE_BACKUP_SOURCE:
+                    source_value = str(getattr(run, "source", "") or "").strip().lower()
+                    if source_value == NATIVE_BACKUP_SOURCE:
                         max_upload_bytes = max(1, int(getattr(settings, "import_max_upload_mb", 25) or 25)) * 1024 * 1024
                         preview = preview_native_backup_import(
+                            db,
+                            run=run,
+                            subject_id=int(sid),
+                            import_storage_root=import_storage_root,
+                            max_upload_bytes=max_upload_bytes,
+                        )
+                    elif source_value == CATALOG_CSV_SOURCE:
+                        max_upload_bytes = max(1, int(getattr(settings, "import_max_upload_mb", 25) or 25)) * 1024 * 1024
+                        preview = preview_catalog_csv_import(
                             db,
                             run=run,
                             subject_id=int(sid),
@@ -14389,7 +14552,12 @@ def create_app() -> FastAPI:
                             import_storage_root=import_storage_root,
                         )
                 except Exception as exc:
-                    preview_error = str(exc)
+                    preview_error = (
+                        "Catalog CSV is invalid or unavailable."
+                        if str(getattr(run, "source", "") or "").strip().lower()
+                        == CATALOG_CSV_SOURCE
+                        else str(exc)
+                    )
 
             return templates.TemplateResponse(
                 request,
