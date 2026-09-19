@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from datetime import date
 import io
 import zipfile
+import xml.etree.ElementTree as ET
 
 import pytest
 
@@ -9,6 +11,8 @@ from fakturek.fakturoid_import import (
     _payload_to_xml_bytes,
     _safe_resolve_under_root,
     detect_xml_import_format,
+    parse_fakturek_invoices_xml_legacy,
+    parse_fakturek_invoices_xml_v1,
     parse_fakturoid_invoices_xml,
     parse_money_s3_invoices_xml,
     parse_pohoda_invoices_xml,
@@ -169,6 +173,70 @@ MONEY_S3_XML = (
 ).encode("utf-8")
 
 
+FAKTUREK_XML_V1 = (
+    """<?xml version="1.0" encoding="UTF-8"?>
+<fakturek_export kind="invoice_export" format="fakturek_invoice_export" version="1"
+  origin_subject_id="12" generated_at_utc="2026-09-19T10:00:00+00:00">
+  <invoices count="1">
+    <invoice id="42" number="2026-0042" document_type="invoice" status="cancelled">
+      <issue_date>2026-09-01</issue_date>
+      <taxable_supply_date>2026-08-31</taxable_supply_date>
+      <due_date>2026-09-15</due_date>
+      <paid_on></paid_on>
+      <sent_at>2026-09-02T08:30:00+02:00</sent_at>
+      <currency>CZK</currency>
+      <variable_symbol>20260042</variable_symbol>
+      <payment_method>bank_transfer</payment_method>
+      <total_cents>12000</total_cents>
+      <discount_cents>100</discount_cents>
+      <rounding_adjustment_cents>0</rounding_adjustment_cents>
+      <notes>Poznámka</notes>
+      <internal_notes>Interní</internal_notes>
+      <source_invoice_number>2026-0001</source_invoice_number>
+      <source_invoice_id>1</source_invoice_id>
+      <contact>
+        <id>8</id><name>Acme s.r.o.</name><email>billing@acme.test</email>
+        <phone>+420123456789</phone><street>Národní 1</street><city>Praha</city>
+        <zip>11000</zip><country>CZ</country><ico>12345678</ico><dic>CZ12345678</dic>
+      </contact>
+      <bank_account>
+        <label>Hlavní účet</label><number>123456789/0100</number>
+        <iban>CZ6508000000192000145399</iban><bic>GIBACZPX</bic><country>CZ</country>
+      </bank_account>
+      <items count="1">
+        <item line_no="1">
+          <description>Členský příspěvek</description><quantity>1</quantity><unit>ks</unit>
+          <unit_price_cents>10000</unit_price_cents><vat_rate>21</vat_rate>
+          <line_net_cents>10000</line_net_cents><line_vat_cents>2100</line_vat_cents>
+          <line_total_cents>12100</line_total_cents>
+        </item>
+      </items>
+    </invoice>
+  </invoices>
+</fakturek_export>
+"""
+).encode("utf-8")
+
+
+FAKTUREK_XML_LEGACY = (
+    """<?xml version="1.0" encoding="UTF-8"?>
+<fakturek_export kind="invoice_export" subject_id="12" generated_at_utc="2026-09-18T10:00:00+00:00">
+  <invoices count="1">
+    <invoice id="42" number="2026-0042" document_type="invoice" status="paid">
+      <issue_date>2026-09-01</issue_date><due_date>2026-09-15</due_date><paid_on>2026-09-03</paid_on>
+      <currency>CZK</currency><total_cents>12100</total_cents><discount_cents>0</discount_cents>
+      <rounding_adjustment_cents>0</rounding_adjustment_cents><notes>Poznámka</notes><internal_notes></internal_notes>
+      <contact><id>8</id><name>Acme s.r.o.</name><email>billing@acme.test</email><ico>12345678</ico></contact>
+      <items count="1"><item line_no="1"><description>Položka</description><quantity>1</quantity><unit>ks</unit>
+        <unit_price_cents>10000</unit_price_cents><vat_rate>21</vat_rate><line_net_cents>10000</line_net_cents>
+        <line_vat_cents>2100</line_vat_cents><line_total_cents>12100</line_total_cents></item></items>
+    </invoice>
+  </invoices>
+</fakturek_export>
+"""
+).encode("utf-8")
+
+
 def test_parse_fakturoid_xml_basic():
     invs = parse_fakturoid_invoices_xml(SAMPLE_XML)
     assert len(invs) == 1
@@ -199,6 +267,119 @@ def test_detect_xml_import_format_variants():
     assert detect_xml_import_format(SAMPLE_XML) == "fakturoid"
     assert detect_xml_import_format(POHODA_XML) == "pohoda_xml"
     assert detect_xml_import_format(MONEY_S3_XML) == "money_s3_xml"
+    assert detect_xml_import_format(FAKTUREK_XML_V1) == "fakturek_xml_v1"
+    assert detect_xml_import_format(FAKTUREK_XML_LEGACY) == "fakturek_xml_legacy"
+
+
+def test_detect_fakturek_xml_rejects_unknown_version_and_kind():
+    with pytest.raises(ValueError, match="verze"):
+        detect_xml_import_format(FAKTUREK_XML_V1.replace(b'version="1"', b'version="2"'))
+    with pytest.raises(ValueError, match="typ"):
+        detect_xml_import_format(FAKTUREK_XML_V1.replace(b'kind="invoice_export"', b'kind="contacts"'))
+
+
+def test_parse_fakturek_xml_v1_preserves_native_semantics():
+    invoices = parse_fakturek_invoices_xml_v1(FAKTUREK_XML_V1)
+    assert len(invoices) == 1
+    invoice = invoices[0]
+    assert invoice.external_id == "v1:12:invoice:42"
+    assert invoice.buyer_external_id == "v1:12:contact:8"
+    assert invoice.number == "2026-0042"
+    assert invoice.document_type == "invoice"
+    assert invoice.status == "cancelled"
+    assert invoice.taxable_supply_date == date(2026, 8, 31)
+    assert invoice.variable_symbol == "20260042"
+    assert invoice.discount_cents == 100
+    assert invoice.rounding_adjustment_cents == 0
+    assert invoice.buyer.phone == "+420123456789"
+    assert invoice.buyer.dic == "CZ12345678"
+    assert invoice.bank_account_label == "Hlavní účet"
+    assert invoice.bank_account == "123456789/0100"
+    assert invoice.iban == "CZ6508000000192000145399"
+    assert invoice.source_invoice_external_id == "v1:12:invoice:1"
+    assert invoice.lines[0].total_cents == 12100
+
+
+def test_parse_legacy_fakturek_export_reads_attributes_and_nested_contact():
+    invoices = parse_fakturek_invoices_xml_legacy(FAKTUREK_XML_LEGACY)
+    assert len(invoices) == 1
+    invoice = invoices[0]
+    assert invoice.external_id == "legacy:12:invoice:42"
+    assert invoice.number == "2026-0042"
+    assert invoice.status == "paid"
+    assert invoice.buyer.name == "Acme s.r.o."
+    assert invoice.lines[0].description == "Položka"
+
+
+def test_parse_fakturek_xml_v1_rejects_tampered_totals_and_duplicate_ids():
+    with pytest.raises(ValueError, match="neodpovídá total_cents"):
+        parse_fakturek_invoices_xml_v1(FAKTUREK_XML_V1.replace(b"<total_cents>12000", b"<total_cents>11999"))
+    duplicated = FAKTUREK_XML_V1.replace(
+        b"</invoices>",
+        FAKTUREK_XML_V1.split(b"<invoice ", 1)[1].split(b"</invoice>", 1)[0].join([b"<invoice ", b"</invoice>"]) + b"</invoices>",
+    )
+    duplicated = duplicated.replace(b'<invoices count="1">', b'<invoices count="2">')
+    with pytest.raises(ValueError, match="duplicitní invoice@id"):
+        parse_fakturek_invoices_xml_v1(duplicated)
+
+    noncanonical_line = FAKTUREK_XML_V1.replace(
+        b"<unit_price_cents>10000",
+        b"<unit_price_cents>9999",
+    )
+    with pytest.raises(ValueError, match="množství, ceně a DPH"):
+        parse_fakturek_invoices_xml_v1(noncanonical_line)
+
+    excessive_discount = (
+        FAKTUREK_XML_V1.replace(b"<discount_cents>100", b"<discount_cents>20000")
+        .replace(b"<rounding_adjustment_cents>0", b"<rounding_adjustment_cents>19900")
+    )
+    with pytest.raises(ValueError, match="sleva"):
+        parse_fakturek_invoices_xml_v1(excessive_discount)
+
+
+def test_parse_fakturek_xml_v1_supports_signed_credit_note_and_rejects_unknown_enums():
+    root = ET.fromstring(FAKTUREK_XML_V1)
+    invoices_el = root.find("./invoices")
+    assert invoices_el is not None
+    credit_el = invoices_el.find("./invoice")
+    assert credit_el is not None
+
+    source_el = ET.fromstring(ET.tostring(credit_el, encoding="utf-8"))
+    source_el.attrib.update(id="1", number="2026-0001", document_type="invoice", status="issued")
+    source_el.find("./source_invoice_number").text = ""
+    source_el.find("./source_invoice_id").text = ""
+    invoices_el.insert(0, source_el)
+    invoices_el.attrib["count"] = "2"
+
+    credit_el.attrib["document_type"] = "credit_note"
+    credit_el.find("./total_cents").text = "-12100"
+    credit_el.find("./discount_cents").text = "0"
+    credit_el.find("./items/item/unit_price_cents").text = "-10000"
+    credit_el.find("./items/item/line_net_cents").text = "-10000"
+    credit_el.find("./items/item/line_vat_cents").text = "-2100"
+    credit_el.find("./items/item/line_total_cents").text = "-12100"
+
+    credit_note_pair = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    parsed = parse_fakturek_invoices_xml_v1(credit_note_pair)
+    parsed_credit = next(invoice for invoice in parsed if invoice.document_type == "credit_note")
+    assert parsed_credit.total_cents == -12100
+    assert parsed_credit.lines[0].unit_price_cents == -10000
+
+    mismatched_source_number = credit_note_pair.replace(
+        b"<source_invoice_number>2026-0001</source_invoice_number>",
+        b"<source_invoice_number>2026-TYPO</source_invoice_number>",
+    )
+    with pytest.raises(ValueError, match="neodpovídá source_invoice_number"):
+        parse_fakturek_invoices_xml_v1(mismatched_source_number)
+
+    with pytest.raises(ValueError, match="document_type"):
+        parse_fakturek_invoices_xml_v1(
+            FAKTUREK_XML_V1.replace(b'document_type="invoice"', b'document_type="unsupported"')
+        )
+    with pytest.raises(ValueError, match="status"):
+        parse_fakturek_invoices_xml_v1(
+            FAKTUREK_XML_V1.replace(b'status="cancelled"', b'status="unknown"')
+        )
 
 
 def test_parse_pohoda_xml_basic():
