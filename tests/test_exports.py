@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+import hashlib
 import io
+from pathlib import Path
 import re
 import zipfile
 import xml.etree.ElementTree as ET
@@ -419,6 +421,9 @@ def test_imports_page_shows_advanced_invoice_export_builder(monkeypatch, tmp_pat
     assert 'name="contact_ids"' in response.text
     assert 'name="format"' in response.text
     assert "Jeden sloučený PDF" in response.text
+    assert "Fakturek XML v1" in response.text
+    assert "Fakturek XML / jiné XML" in response.text
+    assert "Znovu importuje Fakturek XML v1 i starší exporty" in response.text
 
     _reset_settings_and_db()
 
@@ -480,6 +485,9 @@ def test_import_history_uses_human_labels_with_safe_fallback(monkeypatch, tmp_pa
     assert '<html lang="en"' in english_response.text
     assert "<strong>Fakturek Catalog CSV v1</strong>" in english_response.text
     assert "<strong>PDF / ZIP archive</strong>" in english_response.text
+    assert "Fakturek XML v1" in english_response.text
+    assert "<strong>Fakturek XML / other XML</strong>" in english_response.text
+    assert "Re-imports Fakturek XML v1 and older exports" in english_response.text
     assert "<td>POHODA XML</td>" in english_response.text
     assert "<td>Completed</td>" in english_response.text
     assert "<td>Uploaded</td>" in english_response.text
@@ -594,11 +602,187 @@ def test_custom_invoice_export_xml_respects_filters(monkeypatch, tmp_path):
     assert response.headers["content-type"].startswith("application/xml")
 
     root = ET.fromstring(response.content)
+    assert root.attrib["format"] == "fakturek_invoice_export"
+    assert root.attrib["version"] == "1"
+    assert root.attrib["origin_subject_id"] == "1"
+    assert "subject_id" not in root.attrib
     invoices = root.findall("./invoices/invoice")
     assert len(invoices) == 1
     assert invoices[0].attrib["number"] == "2026-0001"
+    assert invoices[0].attrib["status"] == "paid"
+    assert invoices[0].findtext("taxable_supply_date") == "2026-03-01"
+    assert invoices[0].findtext("sent_at") == "2026-03-01T10:05:00"
     assert invoices[0].findtext("contact/name") == "Jiří Chvojka"
+    assert invoices[0].findtext("contact/phone") == "+420123456789"
+    assert invoices[0].findtext("contact/dic") == "CZ87654321"
+    assert invoices[0].findtext("bank_account/label") == "Hlavní účet"
+    assert invoices[0].findtext("bank_account/iban") == "CZ6508000000192000145399"
     assert invoices[0].findtext("./items/item/description") == "Členský příspěvek"
+
+    from fakturek.fakturoid_import import parse_fakturek_invoices_xml_v1
+
+    parsed = parse_fakturek_invoices_xml_v1(response.content)
+    assert len(parsed) == 1
+    assert parsed[0].number == "2026-0001"
+    assert parsed[0].buyer.name == "Jiří Chvojka"
+    assert parsed[0].total_cents == 12_100
+
+    _reset_settings_and_db()
+
+
+def test_fakturek_xml_v1_export_round_trips_draft_zero_vat(monkeypatch, tmp_path):
+    client, SessionLocal = _setup_sqlite_app(monkeypatch, tmp_path)
+
+    from fakturek.models import Invoice, InvoiceItem
+
+    with SessionLocal() as db:
+        invoice = db.get(Invoice, 2)
+        item = db.query(InvoiceItem).filter_by(invoice_id=2).one()
+        invoice.total_cents = 2_000
+        item.vat_rate = Decimal("0.00")
+        item.line_net_cents = 2_000
+        item.line_vat_cents = 0
+        item.line_total_cents = 2_000
+        db.commit()
+
+    response = client.post(
+        "/exports/invoices",
+        data={"status": "draft", "format": "xml"},
+    )
+    assert response.status_code == 200
+
+    from fakturek.fakturoid_import import parse_fakturek_invoices_xml_v1
+
+    parsed = parse_fakturek_invoices_xml_v1(response.content)
+    assert len(parsed) == 1
+    assert parsed[0].status == "draft"
+    assert parsed[0].lines[0].vat_rate == Decimal("0.00")
+    assert parsed[0].lines[0].vat_cents == 0
+    assert parsed[0].total_cents == 2_000
+
+    _reset_settings_and_db()
+
+
+def test_fakturek_xml_v1_export_preserves_credit_note_source_identity(monkeypatch, tmp_path):
+    client, SessionLocal = _setup_sqlite_app(monkeypatch, tmp_path)
+
+    from fakturek.models import Invoice, InvoiceItem
+
+    with SessionLocal() as db:
+        db.add(
+            Invoice(
+                id=4,
+                subject_id=1,
+                contact_id=1,
+                number="2026-CREDIT-1",
+                status="issued",
+                document_type="credit_note",
+                source_invoice_id=1,
+                issue_date=date(2026, 3, 20),
+                due_date=date(2026, 3, 20),
+                currency="CZK",
+                total_cents=-6_050,
+                discount_cents=0,
+                rounding_adjustment_cents=0,
+            )
+        )
+        db.add(
+            InvoiceItem(
+                invoice_id=4,
+                description="Částečný dobropis",
+                quantity=Decimal("1.00"),
+                unit_price_cents=-5_000,
+                vat_rate=Decimal("21.00"),
+                line_net_cents=-5_000,
+                line_vat_cents=-1_050,
+                line_total_cents=-6_050,
+                sort_order=1,
+            )
+        )
+        db.commit()
+
+    response = client.post(
+        "/exports/invoices",
+        data={"document_type": "credit_note", "format": "xml"},
+    )
+    assert response.status_code == 200
+    root = ET.fromstring(response.content)
+    invoices_xml = root.findall("./invoices/invoice")
+    assert len(invoices_xml) == 2
+    assert root.find("./invoices").attrib == {
+        "count": "2",
+        "selected_count": "1",
+        "dependency_count": "1",
+    }
+    credit_xml = next(invoice for invoice in invoices_xml if invoice.attrib["document_type"] == "credit_note")
+    assert credit_xml.findtext("source_invoice_id") == "1"
+    assert credit_xml.findtext("source_invoice_number") == "2026-0001"
+
+    from fakturek.fakturoid_import import parse_fakturek_invoices_xml_v1, process_import_run
+    from fakturek.models import ImportRun, Subject
+
+    parsed = parse_fakturek_invoices_xml_v1(response.content)
+    assert len(parsed) == 2
+    parsed_credit = next(invoice for invoice in parsed if invoice.document_type == "credit_note")
+    assert parsed_credit.source_invoice_external_id == "v1:1:invoice:1"
+    assert parsed_credit.total_cents == -6_050
+
+    import_root = Path(tmp_path) / "roundtrip-imports"
+    payload_sha256 = hashlib.sha256(response.content).hexdigest()
+    with SessionLocal() as db:
+        db.add(
+            Subject(
+                id=2,
+                public_username="roundtrip-target",
+                name="Round-trip target",
+                email="target@example.test",
+                country="CZ",
+                default_currency="CZK",
+            )
+        )
+        run = ImportRun(
+            subject_id=2,
+            source="invoice_xml",
+            status="uploaded",
+            file_name="credit-note.xml",
+            file_path="",
+            file_sha256=payload_sha256,
+            file_size_bytes=len(response.content),
+            mime_type="application/xml",
+        )
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+
+        relative_path = Path(f"subject-2/run-{int(run.id)}/credit-note.xml")
+        stored_path = import_root / relative_path
+        stored_path.parent.mkdir(parents=True, exist_ok=True)
+        stored_path.write_bytes(response.content)
+        run.file_path = relative_path.as_posix()
+
+        summary = process_import_run(db, run=run, subject_id=2, import_storage_root=import_root)
+        db.commit()
+
+        imported = db.query(Invoice).filter_by(subject_id=2).order_by(Invoice.id.asc()).all()
+        assert summary["invoices"]["imported"] == 2
+        assert len(imported) == 2
+        imported_source = next(invoice for invoice in imported if invoice.document_type == "invoice")
+        imported_credit = next(invoice for invoice in imported if invoice.document_type == "credit_note")
+        assert imported_credit.source_invoice_id == imported_source.id
+        assert imported_credit.total_cents == -6_050
+
+    with SessionLocal() as db:
+        source = db.get(Invoice, 1)
+        assert source is not None
+        source.status = "draft"
+        db.commit()
+
+    rejected = client.post(
+        "/exports/invoices",
+        data={"document_type": "credit_note", "format": "xml"},
+    )
+    assert rejected.status_code == 422
+    assert "původní fakturou ve stavu konceptu" in rejected.text
 
     _reset_settings_and_db()
 
