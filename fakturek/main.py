@@ -13960,6 +13960,20 @@ def create_app() -> FastAPI:
                 return str(option.get("label") or value or "")
         return str(value or "")
 
+    IMPORT_RUN_STATUS_LABELS: dict[str, str] = {
+        "running": "Probíhá",
+        "uploaded": "Nahráno",
+        "finished": "Dokončeno",
+        "error": "Chyba",
+    }
+
+    def _import_run_status_label(value: str | None) -> str:
+        normalized = str(value or "").strip().lower()
+        return IMPORT_RUN_STATUS_LABELS.get(normalized, str(value or ""))
+
+    templates.env.filters["import_source"] = _import_source_label
+    templates.env.filters["import_run_status"] = _import_run_status_label
+
     def _import_run_summary_payload(run) -> dict[str, object]:
         try:
             payload = json.loads(str(getattr(run, "summary_json", "") or ""))
