@@ -32,7 +32,7 @@
         <table class="table">
           <tbody>
             <tr><th>Zdroj</th><td>{{ run_source_label or run.source }}</td></tr>
-            <tr><th>Stav</th><td>{{ run.status }}</td></tr>
+            <tr><th>Stav</th><td>{{ run.status | import_run_status }}</td></tr>
             <tr><th>Začátek</th><td>{{ run.started_at }}</td></tr>
             <tr><th>Konec</th><td>{{ run.finished_at or '—' }}</td></tr>
           </tbody>

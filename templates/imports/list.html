@@ -319,8 +319,8 @@
                   {% for r in runs %}
                     <tr>
                       <td><a href="/imports/{{ r.id }}">#{{ r.id }}</a></td>
-                      <td>{{ r.source }}</td>
-                      <td>{{ r.status }}</td>
+                      <td>{{ r.source | import_source }}</td>
+                      <td>{{ r.status | import_run_status }}</td>
                       <td>
                         {% if r.file_name %}
                           {{ r.file_name }}

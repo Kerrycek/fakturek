@@ -423,6 +423,79 @@ def test_imports_page_shows_advanced_invoice_export_builder(monkeypatch, tmp_pat
     _reset_settings_and_db()
 
 
+def test_import_history_uses_human_labels_with_safe_fallback(monkeypatch, tmp_path):
+    client, SessionLocal = _setup_sqlite_app(monkeypatch, tmp_path)
+
+    from fakturek.models import ImportRun
+
+    with SessionLocal() as db:
+        known = ImportRun(
+            subject_id=1,
+            source="pohoda_xml",
+            status="finished",
+            file_name="invoices.xml",
+        )
+        unknown = ImportRun(
+            subject_id=1,
+            source="legacy_custom",
+            status="legacy_state",
+            file_name="legacy.dat",
+        )
+        db.add_all(
+            [
+                known,
+                unknown,
+                ImportRun(subject_id=1, source="contacts_csv", status="uploaded"),
+                ImportRun(subject_id=1, source="invoice_xml", status="running"),
+                ImportRun(subject_id=1, source="pdf_archive", status="error"),
+            ]
+        )
+        db.commit()
+        known_id = int(known.id)
+
+    response = client.get("/imports")
+    assert response.status_code == 200
+    assert "<td>POHODA XML</td>" in response.text
+    assert "<td>Dokončeno</td>" in response.text
+    assert "<td>Nahráno</td>" in response.text
+    assert "<td>Probíhá</td>" in response.text
+    assert "<td>Chyba</td>" in response.text
+    assert "<td>legacy_custom</td>" in response.text
+    assert "<td>legacy_state</td>" in response.text
+
+    detail = client.get(f"/imports/{known_id}")
+    assert detail.status_code == 200
+    assert "<tr><th>Zdroj</th><td>POHODA XML</td></tr>" in detail.text
+    assert "<tr><th>Stav</th><td>Dokončeno</td></tr>" in detail.text
+
+    switched = client.post(
+        "/settings/language",
+        data={"ui_language": "en", "next": "/imports"},
+        follow_redirects=False,
+    )
+    assert switched.status_code == 303
+
+    english_response = client.get("/imports")
+    assert english_response.status_code == 200
+    assert '<html lang="en"' in english_response.text
+    assert "<strong>Fakturek Catalog CSV v1</strong>" in english_response.text
+    assert "<strong>PDF / ZIP archive</strong>" in english_response.text
+    assert "<td>POHODA XML</td>" in english_response.text
+    assert "<td>Completed</td>" in english_response.text
+    assert "<td>Uploaded</td>" in english_response.text
+    assert "<td>In progress</td>" in english_response.text
+    assert "<td>Error</td>" in english_response.text
+    assert "<td>legacy_custom</td>" in english_response.text
+    assert "<td>legacy_state</td>" in english_response.text
+
+    english_detail = client.get(f"/imports/{known_id}")
+    assert english_detail.status_code == 200
+    assert "<td>POHODA XML</td>" in english_detail.text
+    assert "<td>Completed</td>" in english_detail.text
+
+    _reset_settings_and_db()
+
+
 def test_import_upload_accepts_multipart_with_csrf(monkeypatch, tmp_path):
     client, SessionLocal = _setup_sqlite_app(monkeypatch, tmp_path)
     payload = b"<contacts></contacts>"
