@@ -422,6 +422,7 @@ def test_imports_page_shows_advanced_invoice_export_builder(monkeypatch, tmp_pat
     assert 'name="format"' in response.text
     assert "Jeden sloučený PDF" in response.text
     assert "Fakturek XML v1" in response.text
+    assert "Fakturek XML v2 (včetně plateb)" in response.text
     assert "Fakturek XML / jiné XML" in response.text
     assert "Znovu importuje Fakturek XML v1 i starší exporty" in response.text
 
@@ -486,6 +487,7 @@ def test_import_history_uses_human_labels_with_safe_fallback(monkeypatch, tmp_pa
     assert "<strong>Fakturek Catalog CSV v1</strong>" in english_response.text
     assert "<strong>PDF / ZIP archive</strong>" in english_response.text
     assert "Fakturek XML v1" in english_response.text
+    assert "Fakturek XML v2 (including payments)" in english_response.text
     assert "<strong>Fakturek XML / other XML</strong>" in english_response.text
     assert "Re-imports Fakturek XML v1 and older exports" in english_response.text
     assert "<td>POHODA XML</td>" in english_response.text
@@ -618,6 +620,7 @@ def test_custom_invoice_export_xml_respects_filters(monkeypatch, tmp_path):
     assert invoices[0].findtext("bank_account/label") == "Hlavní účet"
     assert invoices[0].findtext("bank_account/iban") == "CZ6508000000192000145399"
     assert invoices[0].findtext("./items/item/description") == "Členský příspěvek"
+    assert invoices[0].find("./payments") is None
 
     from fakturek.fakturoid_import import parse_fakturek_invoices_xml_v1
 
@@ -626,6 +629,179 @@ def test_custom_invoice_export_xml_respects_filters(monkeypatch, tmp_path):
     assert parsed[0].number == "2026-0001"
     assert parsed[0].buyer.name == "Jiří Chvojka"
     assert parsed[0].total_cents == 12_100
+
+    _reset_settings_and_db()
+
+
+def test_fakturek_xml_v2_export_preserves_ordered_signed_payments(monkeypatch, tmp_path):
+    client, SessionLocal = _setup_sqlite_app(monkeypatch, tmp_path)
+
+    from fakturek.models import Payment
+
+    with SessionLocal() as db:
+        db.add(
+            Payment(
+                id=2,
+                invoice_id=1,
+                paid_on=date(2026, 3, 11),
+                amount_cents=-100,
+                note="Korekce platby",
+            )
+        )
+        db.commit()
+
+    response = client.post(
+        "/exports/invoices",
+        data={
+            "date_from": "2026-03-01",
+            "date_to": "2026-03-01",
+            "status": "paid",
+            "document_type": "invoice",
+            "contact_ids": ["1"],
+            "format": "xml_v2",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/xml")
+    assert "-v2.xml" in response.headers["content-disposition"]
+    root = ET.fromstring(response.content)
+    assert root.attrib["version"] == "2"
+    assert root.attrib["origin_subject_id"] == "1"
+    payments = root.findall("./invoices/invoice/payments/payment")
+    assert [payment.attrib["id"] for payment in payments] == ["1", "2"]
+    assert [payment.findtext("paid_on") for payment in payments] == [
+        "2026-03-10",
+        "2026-03-11",
+    ]
+    assert [payment.findtext("amount_cents") for payment in payments] == ["12100", "-100"]
+    assert [payment.findtext("note") for payment in payments] == [
+        "Bankovní převod",
+        "Korekce platby",
+    ]
+
+    from fakturek.fakturoid_import import parse_fakturek_invoices_xml_v2
+
+    parsed = parse_fakturek_invoices_xml_v2(response.content)
+    assert [payment.amount_cents for payment in parsed[0].payments] == [12_100, -100]
+    assert [payment.note for payment in parsed[0].payments] == [
+        "Bankovní převod",
+        "Korekce platby",
+    ]
+
+    _reset_settings_and_db()
+
+
+@pytest.mark.parametrize(
+    "unsafe_note",
+    ["Neplatný\x01text", "Změněný\rřádek", "C1\x85text", "X\ufdd0Y"],
+)
+def test_fakturek_xml_v2_export_rejects_non_roundtrip_payment_note(
+    monkeypatch,
+    tmp_path,
+    unsafe_note,
+):
+    client, SessionLocal = _setup_sqlite_app(monkeypatch, tmp_path)
+
+    from fakturek.models import Payment
+
+    with SessionLocal() as db:
+        payment = db.get(Payment, 1)
+        assert payment is not None
+        payment.note = unsafe_note
+        db.commit()
+
+    response = client.post(
+        "/exports/invoices",
+        data={"status": "paid", "format": "xml_v2"},
+    )
+
+    assert response.status_code == 422
+    assert "Poznámka platby obsahuje nepovolené znaky XML" in response.text
+
+    _reset_settings_and_db()
+
+
+@pytest.mark.parametrize(
+    ("constant_name", "limit", "error_text"),
+    [
+        ("FAKTUREK_INVOICE_XML_MAX_INVOICES", 2, "příliš mnoho faktur"),
+        ("FAKTUREK_INVOICE_XML_MAX_ITEMS", 1, "příliš mnoho položek"),
+        ("FAKTUREK_INVOICE_XML_MAX_PAYMENTS", 0, "příliš mnoho plateb"),
+    ],
+)
+def test_fakturek_xml_v2_export_enforces_importer_row_limits(
+    monkeypatch,
+    tmp_path,
+    constant_name,
+    limit,
+    error_text,
+):
+    client, _SessionLocal = _setup_sqlite_app(monkeypatch, tmp_path)
+
+    import fakturek.fakturoid_import as import_module
+
+    monkeypatch.setattr(import_module, constant_name, limit)
+    response = client.post("/exports/invoices", data={"format": "xml_v2"})
+
+    assert response.status_code == 422
+    assert error_text in response.text
+
+    _reset_settings_and_db()
+
+
+def test_fakturek_xml_v2_export_stays_within_current_import_upload_limit(monkeypatch, tmp_path):
+    monkeypatch.setenv("IMPORT_MAX_UPLOAD_MB", "1")
+    client, SessionLocal = _setup_sqlite_app(monkeypatch, tmp_path)
+
+    from fakturek.models import Invoice, InvoiceItem
+
+    with SessionLocal() as db:
+        original = db.get(Invoice, 1)
+        assert original is not None
+        original.notes = "N" * 100_000
+        original.internal_notes = "I" * 100_000
+        for invoice_id in range(4, 9):
+            db.add(
+                Invoice(
+                    id=invoice_id,
+                    subject_id=1,
+                    contact_id=1,
+                    number=f"2026-SIZE-{invoice_id}",
+                    status="paid",
+                    issue_date=date(2026, 3, invoice_id),
+                    due_date=date(2026, 3, invoice_id + 10),
+                    paid_on=date(2026, 3, invoice_id + 1),
+                    currency="CZK",
+                    notes="N" * 100_000,
+                    internal_notes="I" * 100_000,
+                    total_cents=12_100,
+                    discount_cents=0,
+                    rounding_adjustment_cents=0,
+                )
+            )
+            db.add(
+                InvoiceItem(
+                    invoice_id=invoice_id,
+                    description="Položka",
+                    quantity=Decimal("1.00"),
+                    unit_price_cents=10_000,
+                    vat_rate=Decimal("21.00"),
+                    line_net_cents=10_000,
+                    line_vat_cents=2_100,
+                    line_total_cents=12_100,
+                    sort_order=0,
+                )
+            )
+        db.commit()
+
+    response = client.post(
+        "/exports/invoices",
+        data={"status": "paid", "format": "xml_v2"},
+    )
+
+    assert response.status_code == 422
+    assert "překračuje maximální velikost povolenou pro import" in response.text
 
     _reset_settings_and_db()
 

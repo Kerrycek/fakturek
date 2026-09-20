@@ -233,6 +233,7 @@ UI_TRANSLATIONS_EN: dict[str, str] = {
     "Faktury CSV": "Invoices CSV",
     "Faktury XML": "Invoices XML",
     "Fakturek XML v1": "Fakturek XML v1",
+    "Fakturek XML v2 (včetně plateb)": "Fakturek XML v2 (including payments)",
     "Fakturek XML / jiné XML": "Fakturek XML / other XML",
     "Vystav fakturu rovnou, nebo si ji ulož jako koncept. Koncept má jen interní DRAFT-ID a finální číslo dostane až při vystavení.": "Issue the invoice right away, or save it as a draft. A draft only has an internal DRAFT ID and gets its final number when issued.",
     "Pro vystavení faktury je potřeba založit aspoň jednoho odběratele.": "To issue an invoice, create at least one customer first.",
@@ -718,7 +719,25 @@ UI_TRANSLATIONS_EN.update(
         "Fakturoid, obecné CSV kontaktů, XML/ISDOC faktury, PDF/ZIP a cílené XML importy pro POHODA a Money S3.": "Fakturoid, generic contact CSV, XML/ISDOC invoices, PDF/ZIP and targeted XML imports for POHODA and Money S3.",
         "XML faktury, CSV kontakty nebo ZIP z Fakturoidu. Nejbezpečnější cesta pro kompletní migraci.": "XML invoices, contact CSV or a ZIP from Fakturoid. The safest path for a complete migration.",
         "Jednodušší import kontaktů z jiného systému. Hodí se pro CRM exporty nebo ručně upravené CSV.": "Simpler contact import from another system. Useful for CRM exports or manually adjusted CSV files.",
-        "Znovu importuje Fakturek XML v1 i starší exporty; podporuje také ISDOC a další strukturované XML faktury.": "Re-imports Fakturek XML v1 and older exports; also supports ISDOC and other structured invoice XML files.",
+        (
+            "Znovu importuje Fakturek XML v1 i starší exporty; verze v2 navíc "
+            "přenese platby. Podporuje také ISDOC a další strukturované XML faktury."
+        ): (
+            "Re-imports Fakturek XML v1 and older exports; v2 also transfers payments. "
+            "It also supports ISDOC and other structured invoice XML files."
+        ),
+        (
+            "XML v2 pro přenos včetně plateb, CSV pro účetní přehled nebo PDF ZIP "
+            "pro archiv."
+        ): (
+            "XML v2 for transfers including payments, CSV for accounting overviews, "
+            "or PDF ZIP for archiving."
+        ),
+        "Platby nalezené": "Payments found",
+        "Platby nové": "New payments",
+        "Platby znovupoužité": "Reused payments",
+        "Platby bez zásahu": "Payments unchanged",
+        "Chyby u plateb": "Payment errors",
         "Import ISDOC faktur ve formátu .isdoc, XML nebo ZIP s ISDOC soubory.": "Import ISDOC invoices in .isdoc, XML or ZIP with ISDOC files.",
         "Doplňkový import PDF faktur nebo ZIPu s PDF. Vhodné hlavně pro archiv a dohledání podkladů.": "Supplementary import of invoice PDFs or a ZIP with PDFs. Best for archive and document lookup.",
         "Skutečný import faktur z POHODA XML včetně partnera, položek, bankovního účtu a VS.": "Real invoice import from POHODA XML, including partner, items, bank account and variable symbol.",

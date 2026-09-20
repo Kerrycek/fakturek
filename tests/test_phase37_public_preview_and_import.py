@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 import hashlib
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
 import pytest
 from starlette.testclient import TestClient
@@ -150,6 +151,53 @@ def _fakturek_xml_v1_payload(*, generated_at: str = "2026-09-19T10:00:00+00:00")
 """.encode("utf-8")
 
 
+def _fakturek_xml_v2_payload(*, generated_at: str = "2026-09-19T10:00:00+00:00") -> bytes:
+    root = ET.fromstring(_fakturek_xml_v1_payload(generated_at=generated_at))
+    root.attrib["version"] = "2"
+    invoice = root.find("./invoices/invoice")
+    assert invoice is not None
+    invoice_paid_on = invoice.find("./paid_on")
+    assert invoice_paid_on is not None
+    invoice_paid_on.text = "2026-09-06"
+    payments = ET.SubElement(invoice, "payments", {"count": "2"})
+    first = ET.SubElement(payments, "payment", {"id": "901"})
+    ET.SubElement(first, "paid_on").text = "2026-09-03"
+    ET.SubElement(first, "amount_cents").text = "12100"
+    ET.SubElement(first, "note").text = "První platba"
+    second = ET.SubElement(payments, "payment", {"id": "902"})
+    ET.SubElement(second, "paid_on").text = "2026-09-04"
+    ET.SubElement(second, "amount_cents").text = "-100"
+    ET.SubElement(second, "note").text = "Korekce"
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def _malformed_fakturek_xml_v2_payload(case: str) -> bytes:
+    root = ET.fromstring(_fakturek_xml_v2_payload())
+    payments = root.find("./invoices/invoice/payments")
+    assert payments is not None
+    rows = payments.findall("./payment")
+    assert len(rows) == 2
+    if case == "count":
+        payments.attrib["count"] = "3"
+    elif case == "duplicate_id":
+        rows[1].attrib["id"] = rows[0].attrib["id"]
+    elif case == "date":
+        paid_on = rows[0].find("./paid_on")
+        assert paid_on is not None
+        paid_on.text = "not-a-date"
+    elif case == "range":
+        amount = rows[0].find("./amount_cents")
+        assert amount is not None
+        amount.text = "2147483648"
+    elif case == "note":
+        note = rows[0].find("./note")
+        assert note is not None
+        note.text = "x" * 256
+    else:  # pragma: no cover - test helper guard
+        raise AssertionError(f"Unknown malformed case: {case}")
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
 def _fakturek_credit_pair_payload(*, over_credit: bool = False) -> bytes:
     credit_unit = -15000 if over_credit else -5000
     credit_net = credit_unit
@@ -214,6 +262,21 @@ def _fakturek_credit_pair_payload(*, over_credit: bool = False) -> bytes:
   </invoices>
 </fakturek_export>
 """.encode("utf-8")
+
+
+def _fakturek_credit_pair_v2_payload() -> bytes:
+    root = ET.fromstring(_fakturek_credit_pair_payload())
+    root.attrib["version"] = "2"
+    for invoice in root.findall("./invoices/invoice"):
+        payments = ET.SubElement(invoice, "payments", {"count": "0"})
+        if invoice.attrib.get("document_type") != "invoice":
+            continue
+        payments.attrib["count"] = "1"
+        payment = ET.SubElement(payments, "payment", {"id": "990"})
+        ET.SubElement(payment, "paid_on").text = "2026-09-05"
+        ET.SubElement(payment, "amount_cents").text = "12100"
+        ET.SubElement(payment, "note").text = "Úhrada původní faktury"
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
 
 
 def _reset_settings_and_db() -> None:
@@ -404,6 +467,377 @@ def test_fakturek_xml_v1_preview_process_and_cross_source_replay(monkeypatch, tm
     _reset_settings_and_db()
 
 
+def test_fakturek_xml_v2_preview_process_and_cross_source_payment_replay(monkeypatch, tmp_path):
+    _client, SessionLocal, import_root = _setup_sqlite_app(monkeypatch, tmp_path)
+    payload = _fakturek_xml_v2_payload()
+    run_id = _create_import_run(
+        SessionLocal,
+        import_root,
+        filename="fakturek-v2.xml",
+        payload=payload,
+        source="invoice_xml",
+    )
+
+    from fakturek.fakturoid_import import preview_import_run, process_import_run
+    from fakturek.models import ImportMap, ImportRun, Invoice, Payment
+
+    with SessionLocal() as db:
+        run = db.get(ImportRun, run_id)
+        preview = preview_import_run(db, run=run, subject_id=1, import_storage_root=import_root)
+        assert preview["detected"]["xml_format"] == "fakturek_xml_v2"
+        assert preview["invoices"]["will_import"] == 1
+        assert preview["payments"] == {
+            "parsed": 2,
+            "will_create": 2,
+            "will_reuse": 0,
+            "will_skip": 0,
+            "errors": [],
+        }
+
+        summary = process_import_run(db, run=run, subject_id=1, import_storage_root=import_root)
+        db.commit()
+        assert summary["detected"]["xml_format"] == "fakturek_xml_v2"
+        assert summary["invoices"]["imported"] == 1
+        assert summary["payments"] == {
+            "parsed": 2,
+            "created": 2,
+            "reused": 0,
+            "skipped": 0,
+            "errors": [],
+        }
+
+        invoice = db.query(Invoice).one()
+        payments = db.query(Payment).order_by(Payment.id.asc()).all()
+        assert invoice.status == "cancelled"
+        assert invoice.paid_on == date(2026, 9, 6)
+        assert [(row.paid_on, row.amount_cents, row.note) for row in payments] == [
+            (date(2026, 9, 3), 12_100, "První platba"),
+            (date(2026, 9, 4), -100, "Korekce"),
+        ]
+        assert db.query(ImportMap).filter_by(
+            subject_id=1,
+            source="fakturek_xml_v2",
+            entity_type="payment",
+        ).count() == 2
+
+        # A replay must not overwrite user edits to an imported payment.
+        payments[0].amount_cents = 12_000
+        payments[0].note = "Uživatelská úprava"
+        db.commit()
+
+    replay_id = _create_import_run(
+        SessionLocal,
+        import_root,
+        filename="fakturek-v2-replay.xml",
+        payload=_fakturek_xml_v2_payload(generated_at="2026-09-19T11:00:00+00:00"),
+        source="fakturoid",
+    )
+    with SessionLocal() as db:
+        replay = db.get(ImportRun, replay_id)
+        preview = preview_import_run(db, run=replay, subject_id=1, import_storage_root=import_root)
+        assert preview["invoices"]["already_imported"] == 1
+        assert preview["payments"]["will_reuse"] == 2
+        assert preview["payments"]["will_create"] == 0
+        assert preview["payments"]["will_skip"] == 0
+
+        summary = process_import_run(
+            db,
+            run=replay,
+            subject_id=1,
+            import_storage_root=import_root,
+        )
+        db.commit()
+        assert summary["invoices"]["imported"] == 0
+        assert summary["payments"]["created"] == 0
+        assert summary["payments"]["reused"] == 2
+        assert db.query(Invoice).count() == 1
+        assert db.query(Payment).count() == 2
+        first = db.query(Payment).order_by(Payment.id.asc()).first()
+        assert first.amount_cents == 12_000
+        assert first.note == "Uživatelská úprava"
+
+    _reset_settings_and_db()
+
+
+def test_fakturek_xml_v2_preview_counts_payments_skipped_with_invoice_conflict(
+    monkeypatch,
+    tmp_path,
+):
+    _client, SessionLocal, import_root = _setup_sqlite_app(monkeypatch, tmp_path)
+    v1_run_id = _create_import_run(
+        SessionLocal,
+        import_root,
+        filename="fakturek-v1.xml",
+        payload=_fakturek_xml_v1_payload(),
+        source="invoice_xml",
+    )
+
+    from fakturek.fakturoid_import import preview_import_run, process_import_run
+    from fakturek.models import ImportRun, Invoice, Payment
+
+    with SessionLocal() as db:
+        v1_run = db.get(ImportRun, v1_run_id)
+        process_import_run(db, run=v1_run, subject_id=1, import_storage_root=import_root)
+        db.commit()
+
+    v2_run_id = _create_import_run(
+        SessionLocal,
+        import_root,
+        filename="fakturek-v2.xml",
+        payload=_fakturek_xml_v2_payload(),
+        source="fakturoid",
+    )
+    with SessionLocal() as db:
+        v2_run = db.get(ImportRun, v2_run_id)
+        preview = preview_import_run(db, run=v2_run, subject_id=1, import_storage_root=import_root)
+        assert preview["invoices"]["number_conflicts"] == 1
+        assert preview["payments"]["will_skip"] == 2
+        assert preview["payments"]["will_create"] == 0
+
+        summary = process_import_run(db, run=v2_run, subject_id=1, import_storage_root=import_root)
+        db.commit()
+        assert summary["payments"]["skipped"] == 2
+        assert summary["payments"]["created"] == 0
+        assert db.query(Invoice).count() == 1
+        assert db.query(Payment).count() == 0
+
+    _reset_settings_and_db()
+
+
+@pytest.mark.parametrize("case", ["count", "duplicate_id", "date", "range", "note"])
+def test_invalid_fakturek_xml_v2_payment_document_writes_nothing(monkeypatch, tmp_path, case):
+    _client, SessionLocal, import_root = _setup_sqlite_app(monkeypatch, tmp_path)
+    run_id = _create_import_run(
+        SessionLocal,
+        import_root,
+        filename=f"fakturek-v2-{case}.xml",
+        payload=_malformed_fakturek_xml_v2_payload(case),
+        source="invoice_xml",
+    )
+
+    from fakturek.fakturoid_import import process_import_run
+    from fakturek.models import Contact, ImportMap, ImportRun, Invoice, Payment
+
+    with SessionLocal() as db:
+        run = db.get(ImportRun, run_id)
+        summary = process_import_run(db, run=run, subject_id=1, import_storage_root=import_root)
+        db.commit()
+        assert summary["invoices"]["imported"] == 0
+        assert summary["invoices"]["errors"]
+        assert db.query(Invoice).count() == 0
+        assert db.query(Payment).count() == 0
+        assert db.query(Contact).count() == 0
+        assert db.query(ImportMap).count() == 0
+
+    _reset_settings_and_db()
+
+
+def test_fakturek_xml_v2_rejects_cross_tenant_import_run(monkeypatch, tmp_path):
+    _client, SessionLocal, import_root = _setup_sqlite_app(monkeypatch, tmp_path)
+    run_id = _create_import_run(
+        SessionLocal,
+        import_root,
+        filename="fakturek-v2.xml",
+        payload=_fakturek_xml_v2_payload(),
+        source="invoice_xml",
+    )
+
+    from fakturek.fakturoid_import import preview_import_run, process_import_run
+    from fakturek.models import Contact, ImportRun, Invoice, Payment
+
+    with SessionLocal() as db:
+        run = db.get(ImportRun, run_id)
+        with pytest.raises(ValueError, match="nepatří"):
+            preview_import_run(db, run=run, subject_id=2, import_storage_root=import_root)
+        with pytest.raises(ValueError, match="nepatří"):
+            process_import_run(db, run=run, subject_id=2, import_storage_root=import_root)
+        db.rollback()
+        assert db.query(Invoice).count() == 0
+        assert db.query(Payment).count() == 0
+        assert db.query(Contact).count() == 0
+
+    _reset_settings_and_db()
+
+
+def test_fakturek_xml_v2_payment_import_maps_are_tenant_scoped(monkeypatch, tmp_path):
+    _client, SessionLocal, import_root = _setup_sqlite_app(monkeypatch, tmp_path)
+
+    from fakturek.models import Contact, ImportMap, Invoice, InvoiceItem, Payment, Subject
+
+    with SessionLocal() as db:
+        db.add(Subject(id=2, name="Other tenant", email="other@example.test"))
+        db.add(Contact(id=200, subject_id=2, name="Other buyer"))
+        db.add(
+            Invoice(
+                id=200,
+                subject_id=2,
+                contact_id=200,
+                number="OTHER-1",
+                status="paid",
+                issue_date=date(2026, 9, 1),
+                due_date=date(2026, 9, 15),
+                currency="EUR",
+                total_cents=12_100,
+            )
+        )
+        db.add(
+            InvoiceItem(
+                invoice_id=200,
+                description="Other item",
+                quantity=1,
+                unit_price_cents=10_000,
+                vat_rate=21,
+                line_net_cents=10_000,
+                line_vat_cents=2_100,
+                line_total_cents=12_100,
+                sort_order=0,
+            )
+        )
+        db.add(
+            Payment(
+                id=200,
+                invoice_id=200,
+                paid_on=date(2026, 9, 3),
+                amount_cents=12_100,
+                note="Other tenant payment",
+            )
+        )
+        db.add(
+            ImportMap(
+                subject_id=2,
+                source="fakturek_xml_v2",
+                entity_type="payment",
+                external_id="v2:44:payment:901",
+                internal_id=200,
+            )
+        )
+        db.commit()
+
+    run_id = _create_import_run(
+        SessionLocal,
+        import_root,
+        filename="fakturek-v2.xml",
+        payload=_fakturek_xml_v2_payload(),
+        source="invoice_xml",
+    )
+
+    from fakturek.fakturoid_import import preview_import_run, process_import_run
+    from fakturek.models import ImportRun
+
+    with SessionLocal() as db:
+        run = db.get(ImportRun, run_id)
+        preview = preview_import_run(db, run=run, subject_id=1, import_storage_root=import_root)
+        assert preview["payments"]["will_create"] == 2
+        summary = process_import_run(db, run=run, subject_id=1, import_storage_root=import_root)
+        db.commit()
+        assert summary["payments"]["created"] == 2
+        subject_1_payment_ids = [
+            payment.id
+            for payment in db.query(Payment)
+            .join(Invoice, Invoice.id == Payment.invoice_id)
+            .filter(Invoice.subject_id == 1)
+            .order_by(Payment.id.asc())
+            .all()
+        ]
+        assert len(subject_1_payment_ids) == 2
+        assert 200 not in subject_1_payment_ids
+        assert db.get(Payment, 200).note == "Other tenant payment"
+
+    _reset_settings_and_db()
+
+
+def test_fakturek_xml_v2_preview_routes_payment_map_errors_to_payments(monkeypatch, tmp_path):
+    client, SessionLocal, import_root = _setup_sqlite_app(monkeypatch, tmp_path)
+
+    from fakturek.models import ImportMap
+
+    with SessionLocal() as db:
+        db.add(
+            ImportMap(
+                subject_id=1,
+                source="fakturek_xml_v2",
+                entity_type="payment",
+                external_id="v2:44:payment:901",
+                internal_id=999_999,
+            )
+        )
+        db.commit()
+
+    run_id = _create_import_run(
+        SessionLocal,
+        import_root,
+        filename="fakturek-v2.xml",
+        payload=_fakturek_xml_v2_payload(),
+        source="invoice_xml",
+    )
+
+    from fakturek.fakturoid_import import preview_import_run
+    from fakturek.models import ImportRun
+
+    with SessionLocal() as db:
+        run = db.get(ImportRun, run_id)
+        preview = preview_import_run(db, run=run, subject_id=1, import_storage_root=import_root)
+        assert preview["invoices"]["errors"] == []
+        assert preview["payments"]["errors"]
+        assert "integrity faktur nebo plateb" in preview["ready_note"]
+        assert "dobropis" not in preview["ready_note"]
+
+    detail = client.get(f"/imports/{run_id}")
+    assert detail.status_code == 200
+    assert "Chyby u plateb" in detail.text
+    assert "Mapování platby Fakturek XML" in detail.text
+
+    _reset_settings_and_db()
+
+
+def test_fakturek_xml_v2_preview_rejects_stale_invoice_map_without_payments(
+    monkeypatch,
+    tmp_path,
+):
+    _client, SessionLocal, import_root = _setup_sqlite_app(monkeypatch, tmp_path)
+    root = ET.fromstring(_fakturek_xml_v2_payload())
+    payments = root.find("./invoices/invoice/payments")
+    assert payments is not None
+    payments.clear()
+    payments.attrib["count"] = "0"
+    payload = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    from fakturek.models import ImportMap
+
+    with SessionLocal() as db:
+        db.add(
+            ImportMap(
+                subject_id=1,
+                source="fakturek_xml_v2",
+                entity_type="invoice",
+                external_id="v2:44:invoice:77",
+                internal_id=999_999,
+            )
+        )
+        db.commit()
+
+    run_id = _create_import_run(
+        SessionLocal,
+        import_root,
+        filename="fakturek-v2-no-payments.xml",
+        payload=payload,
+        source="invoice_xml",
+    )
+
+    from fakturek.fakturoid_import import preview_import_run
+    from fakturek.models import ImportRun
+
+    with SessionLocal() as db:
+        run = db.get(ImportRun, run_id)
+        preview = preview_import_run(db, run=run, subject_id=1, import_storage_root=import_root)
+        assert preview["payments"]["parsed"] == 0
+        assert preview["payments"]["errors"] == []
+        assert preview["invoices"]["errors"]
+        assert "integrity faktur nebo plateb" in preview["ready_note"]
+
+    _reset_settings_and_db()
+
+
 def test_invalid_fakturek_xml_fails_closed_without_contact_or_invoice_writes(monkeypatch, tmp_path):
     _client, SessionLocal, import_root = _setup_sqlite_app(monkeypatch, tmp_path)
     payload = _fakturek_xml_v1_payload().replace(
@@ -459,6 +893,41 @@ def test_fakturek_xml_v1_restores_credit_note_source_and_limit(monkeypatch, tmp_
         credit = db.query(Invoice).filter_by(number="2026-CREDIT-78").one()
         assert credit.source_invoice_id == original.id
         assert credit.total_cents == -6050
+
+    _reset_settings_and_db()
+
+
+def test_fakturek_xml_v2_restores_credit_dependency_and_its_payment(monkeypatch, tmp_path):
+    _client, SessionLocal, import_root = _setup_sqlite_app(monkeypatch, tmp_path)
+    run_id = _create_import_run(
+        SessionLocal,
+        import_root,
+        filename="fakturek-credit-pair-v2.xml",
+        payload=_fakturek_credit_pair_v2_payload(),
+        source="invoice_xml",
+    )
+
+    from fakturek.fakturoid_import import preview_import_run, process_import_run
+    from fakturek.models import ImportRun, Invoice, Payment
+
+    with SessionLocal() as db:
+        run = db.get(ImportRun, run_id)
+        preview = preview_import_run(db, run=run, subject_id=1, import_storage_root=import_root)
+        assert preview["invoices"]["errors"] == []
+        assert preview["invoices"]["will_import"] == 2
+        assert preview["payments"]["will_create"] == 1
+
+        summary = process_import_run(db, run=run, subject_id=1, import_storage_root=import_root)
+        db.commit()
+        original = db.query(Invoice).filter_by(number="2026-ORIGINAL-77").one()
+        credit = db.query(Invoice).filter_by(number="2026-CREDIT-78").one()
+        payment = db.query(Payment).one()
+        assert summary["invoices"]["imported"] == 2
+        assert summary["payments"]["created"] == 1
+        assert credit.source_invoice_id == original.id
+        assert payment.invoice_id == original.id
+        assert original.status == "paid"
+        assert original.paid_on is None
 
     _reset_settings_and_db()
 

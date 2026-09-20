@@ -13188,6 +13188,7 @@ def create_app() -> FastAPI:
         ("csv", "CSV přehled faktur"),
         ("csv_bundle", "CSV + položky v ZIPu"),
         ("xml", "Fakturek XML v1"),
+        ("xml_v2", "Fakturek XML v2 (včetně plateb)"),
         ("isdoc_zip", "ISDOC (ZIP)"),
         ("pohoda_xml", "POHODA XML"),
         ("money_s3_xml", "Money S3 XML"),
@@ -13333,7 +13334,32 @@ def create_app() -> FastAPI:
         *,
         invoices: list[Invoice],
         subject_id: int,
+        version: str = "1",
     ) -> bytes:
+        xml_version = str(version or "").strip()
+        if xml_version not in {"1", "2"}:
+            raise ValueError("Nepodporovaná verze Fakturek XML exportu.")
+        include_payments = xml_version == "2"
+        if include_payments:
+            from fakturek.fakturoid_import import (
+                FAKTUREK_INVOICE_XML_MAX_BYTES,
+                FAKTUREK_INVOICE_XML_MAX_INVOICES,
+                FAKTUREK_INVOICE_XML_MAX_ITEMS,
+                FAKTUREK_INVOICE_XML_MAX_PAYMENT_NOTE_LENGTH,
+                FAKTUREK_INVOICE_XML_MAX_PAYMENTS,
+                fakturek_xml_payment_note_is_roundtrip_safe,
+                parse_fakturek_invoices_xml_v2,
+            )
+
+            configured_upload_bytes = (
+                max(1, int(getattr(settings, "import_max_upload_mb", 25) or 25))
+                * 1024
+                * 1024
+            )
+            max_v2_bytes = min(
+                int(FAKTUREK_INVOICE_XML_MAX_BYTES),
+                int(configured_upload_bytes),
+            )
         selected_invoices = list(invoices)
         selected_ids = {int(invoice.id) for invoice in selected_invoices}
         dependency_ids = {
@@ -13357,6 +13383,8 @@ def create_app() -> FastAPI:
             if {int(invoice.id) for invoice in dependency_invoices} != dependency_ids:
                 raise ValueError("Dobropis nelze exportovat bez původní faktury.")
         invoices = dependency_invoices + selected_invoices
+        if include_payments and len(invoices) > int(FAKTUREK_INVOICE_XML_MAX_INVOICES):
+            raise ValueError("Fakturek XML v2 obsahuje příliš mnoho faktur.")
         invoices_by_id = {int(invoice.id): invoice for invoice in invoices}
         for credit_note in selected_invoices:
             if _normalize_invoice_document_type(getattr(credit_note, "document_type", "invoice")) != "credit_note":
@@ -13375,17 +13403,46 @@ def create_app() -> FastAPI:
                 raise ValueError("Měna dobropisu neodpovídá původní faktuře.")
 
         invoice_ids = [int(invoice.id) for invoice in invoices]
+        if include_payments and invoice_ids:
+            item_count = int(
+                db.scalar(
+                    select(func.count(InvoiceItem.id))
+                    .join(Invoice, Invoice.id == InvoiceItem.invoice_id)
+                    .where(Invoice.subject_id == int(subject_id))
+                    .where(InvoiceItem.invoice_id.in_(invoice_ids))
+                )
+                or 0
+            )
+            if item_count > int(FAKTUREK_INVOICE_XML_MAX_ITEMS):
+                raise ValueError("Fakturek XML v2 obsahuje příliš mnoho položek.")
         item_rows = _export_invoice_items_rows(db, subject_id=int(subject_id), invoice_ids=invoice_ids)
         items_by_invoice: dict[int, list[dict[str, object]]] = defaultdict(list)
         for row in item_rows:
             items_by_invoice[int(row.get("invoice_id", 0) or 0)].append(row)
+
+        payments_by_invoice: dict[int, list[Payment]] = defaultdict(list)
+        if include_payments and invoice_ids:
+            payment_rows = list(
+                db.scalars(
+                    select(Payment)
+                    .join(Invoice, Invoice.id == Payment.invoice_id)
+                    .where(Invoice.subject_id == int(subject_id))
+                    .where(Payment.invoice_id.in_(invoice_ids))
+                    .order_by(Payment.invoice_id.asc(), Payment.id.asc())
+                    .limit(int(FAKTUREK_INVOICE_XML_MAX_PAYMENTS) + 1)
+                ).all()
+            )
+            if len(payment_rows) > int(FAKTUREK_INVOICE_XML_MAX_PAYMENTS):
+                raise ValueError("Fakturek XML obsahuje příliš mnoho plateb.")
+            for payment in payment_rows:
+                payments_by_invoice[int(payment.invoice_id)].append(payment)
 
         root = ET.Element(
             "fakturek_export",
             {
                 "kind": "invoice_export",
                 "format": "fakturek_invoice_export",
-                "version": "1",
+                "version": xml_version,
                 "origin_subject_id": str(int(subject_id)),
                 "generated_at_utc": utc_now().isoformat(timespec="seconds"),
             },
@@ -13481,7 +13538,46 @@ def create_app() -> FastAPI:
                     raw_value = item_row.get(key, "")
                     ET.SubElement(item_el, key).text = "" if raw_value is None else str(raw_value)
 
-        return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+            if include_payments:
+                invoice_payments = payments_by_invoice.get(int(invoice.id), [])
+                payments_el = ET.SubElement(
+                    invoice_el,
+                    "payments",
+                    {"count": str(len(invoice_payments))},
+                )
+                for payment in invoice_payments:
+                    payment_id = int(getattr(payment, "id", 0) or 0)
+                    if payment_id <= 0:
+                        raise ValueError("Platba nemá platnou zdrojovou identitu.")
+                    paid_on = getattr(payment, "paid_on", None)
+                    if not isinstance(paid_on, date):
+                        raise ValueError("Platba nemá platné datum.")
+                    amount_cents = int(getattr(payment, "amount_cents", 0) or 0)
+                    if not -2_147_483_647 <= amount_cents <= 2_147_483_647:
+                        raise ValueError("Částka platby je mimo povolený rozsah.")
+                    note = str(getattr(payment, "note", "") or "")
+                    if len(note) > int(FAKTUREK_INVOICE_XML_MAX_PAYMENT_NOTE_LENGTH):
+                        raise ValueError("Poznámka platby je příliš dlouhá.")
+                    if not fakturek_xml_payment_note_is_roundtrip_safe(note):
+                        raise ValueError("Poznámka platby obsahuje nepovolené znaky XML.")
+                    payment_el = ET.SubElement(payments_el, "payment", {"id": str(payment_id)})
+                    ET.SubElement(payment_el, "paid_on").text = paid_on.isoformat()
+                    ET.SubElement(payment_el, "amount_cents").text = str(amount_cents)
+                    ET.SubElement(payment_el, "note").text = note
+
+        xml_bytes = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+        if include_payments:
+            if len(xml_bytes) > int(max_v2_bytes):
+                raise ValueError(
+                    "Fakturek XML v2 překračuje maximální velikost povolenou pro import."
+                )
+            try:
+                parse_fakturek_invoices_xml_v2(xml_bytes)
+            except ValueError as exc:
+                raise ValueError(
+                    f"Fakturek XML v2 nelze bezpečně znovu importovat: {exc}"
+                ) from exc
+        return xml_bytes
 
     def _invoice_export_items_by_invoice(
         db: Session,
@@ -13859,6 +13955,24 @@ def create_app() -> FastAPI:
                     headers={"Content-Disposition": _attachment_disposition(f"{file_base}.xml")},
                 )
 
+            if prefill["format"] == "xml_v2":
+                try:
+                    xml_bytes = _build_invoice_export_xml_bytes(
+                        db,
+                        invoices=invoices,
+                        subject_id=int(sid),
+                        version="2",
+                    )
+                except ValueError as exc:
+                    return _render_export_error(str(exc), status_code=422)
+                return Response(
+                    content=xml_bytes,
+                    media_type="application/xml; charset=utf-8",
+                    headers={
+                        "Content-Disposition": _attachment_disposition(f"{file_base}-v2.xml")
+                    },
+                )
+
             if prefill["format"] == "isdoc_zip":
                 try:
                     zip_bytes = _build_invoice_isdoc_zip_bytes(db, invoices=invoices)
@@ -13993,7 +14107,10 @@ def create_app() -> FastAPI:
         {
             "value": "invoice_xml",
             "label": "Fakturek XML / jiné XML",
-            "description": "Znovu importuje Fakturek XML v1 i starší exporty; podporuje také ISDOC a další strukturované XML faktury.",
+            "description": (
+                "Znovu importuje Fakturek XML v1 i starší exporty; verze v2 navíc "
+                "přenese platby. Podporuje také ISDOC a další strukturované XML faktury."
+            ),
             "accept": ".xml,.isdoc,.zip,application/xml,application/zip",
         },
         {

@@ -430,6 +430,13 @@ def test_user_without_export_permission_cannot_download_export_endpoints(monkeyp
         response = getattr(client, method)(url, follow_redirects=False)
         assert response.status_code == 403, url
 
+    denied_xml_v2 = client.post(
+        "/exports/invoices",
+        data={"format": "xml_v2"},
+        follow_redirects=False,
+    )
+    assert denied_xml_v2.status_code == 403
+
     with SessionLocal() as db:
         from fakturek.models import UserSubject
 
