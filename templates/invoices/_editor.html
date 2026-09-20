@@ -2067,6 +2067,9 @@
           const padLength = Math.max(1, Math.min(Number(selected.dataset.padLength || '4') || 4, 20));
           const lastCounter = Number(selected.dataset.lastCounter || '0') || 0;
           const lastCounterYear = Number(selected.dataset.lastCounterYear || '') || null;
+          if (lastCounterYear === year && lastCounter >= 2147483647) {
+            return 'Vyčerpáno — další číslo nelze přidělit';
+          }
           const nextCounter = lastCounterYear !== year ? 1 : lastCounter + 1;
           return `${prefix}${String(nextCounter).padStart(padLength, '0')}`;
         };

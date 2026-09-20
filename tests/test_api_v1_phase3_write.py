@@ -349,6 +349,62 @@ def test_api_v1_create_patch_and_issue_invoice_with_permissions(monkeypatch, tmp
         assert invoices[1].number.startswith("DRAFT-")
 
 
+def test_api_v1_issue_rejects_exhausted_series_without_mutation(monkeypatch, tmp_path):
+    client, SessionLocal, owner_token, _editor_token = _setup_sqlite_api_app(monkeypatch, tmp_path)
+
+    with SessionLocal() as db:
+        from fakturek.models import InvoiceSeries
+
+        db.add(
+            InvoiceSeries(
+                id=1,
+                subject_id=1,
+                name="default",
+                prefix="",
+                pad_length=4,
+                last_counter=2_147_483_647,
+                last_counter_year=2026,
+            )
+        )
+        db.commit()
+
+    headers = {"Authorization": f"Bearer {owner_token}"}
+    created = client.post(
+        "/api/v1/subjects/1/invoices",
+        headers=headers,
+        json={
+            "contact_id": 1,
+            "series_id": 1,
+            "issue_date": "2026-03-24",
+            "due_date": "2026-04-07",
+            "items": [
+                {
+                    "description": "Exhausted API series",
+                    "quantity": "1",
+                    "unit_price": "10.00",
+                    "vat_rate": "21",
+                }
+            ],
+        },
+    )
+    assert created.status_code == 201
+    invoice_id = created.json()["id"]
+
+    issued = client.post(f"/api/v1/subjects/1/invoices/{invoice_id}/issue", headers=headers)
+    assert issued.status_code == 409
+    assert issued.json()["error"]["code"] == "invoice_series_counter_exhausted"
+
+    with SessionLocal() as db:
+        from fakturek.models import Invoice, InvoiceSeries
+
+        invoice = db.get(Invoice, invoice_id)
+        series = db.get(InvoiceSeries, 1)
+        assert invoice.status == "draft"
+        assert invoice.number == f"DRAFT-{invoice_id}"
+        assert series.last_counter == 2_147_483_647
+        assert series.last_counter_year == 2026
+
+
 def test_api_v1_sandbox_invoice_preview_does_not_persist(monkeypatch, tmp_path):
     client, SessionLocal, _owner_token, _editor_token = _setup_sqlite_api_app(monkeypatch, tmp_path)
     with SessionLocal() as db:

@@ -316,6 +316,54 @@ def test_create_invoice_with_inline_items(monkeypatch, tmp_path):
     _reset_settings_and_db()
 
 
+def test_create_issued_invoice_rejects_exhausted_series_without_persisting(monkeypatch, tmp_path):
+    client, SessionLocal = _setup_sqlite_app(monkeypatch, tmp_path)
+
+    from fakturek.models import Invoice, InvoiceSeries
+
+    with SessionLocal() as db:
+        series = db.get(InvoiceSeries, 1)
+        series.last_counter = 2_147_483_647
+        series.last_counter_year = 2026
+        db.commit()
+
+    page = client.get("/invoices/new")
+    assert page.status_code == 200
+    assert "Vyčerpáno — další číslo nelze přidělit" in page.text
+    assert "2147483648" not in page.text
+
+    response = client.post(
+        "/invoices/new",
+        data={
+            "contact_id": "1",
+            "series_id": "1",
+            "issue_date": "2026-03-01",
+            "due_date": "2026-03-15",
+            "due_term": "14",
+            "currency": "CZK",
+            "payment_method": "bank_transfer",
+            "invoice_style": "modern",
+            "footer_mode": "trade_register",
+            "item_description": ["Nelze vystavit"],
+            "item_quantity": ["1"],
+            "item_unit": ["ks"],
+            "item_unit_price": ["100.00"],
+            "item_vat_rate": ["21"],
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 409
+    assert "Číselná řada je vyčerpaná" in response.text
+
+    with SessionLocal() as db:
+        assert db.query(Invoice).count() == 0
+        series = db.get(InvoiceSeries, 1)
+        assert series.last_counter == 2_147_483_647
+        assert series.last_counter_year == 2026
+
+    _reset_settings_and_db()
+
+
 def test_edit_invoice_replaces_inline_items(monkeypatch, tmp_path):
     client, SessionLocal = _setup_sqlite_app(monkeypatch, tmp_path)
 

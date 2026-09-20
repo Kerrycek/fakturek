@@ -299,6 +299,87 @@ def test_api_v1_phase7_bulk_workflow_actions(monkeypatch, tmp_path):
     _reset_settings_and_db()
 
 
+def test_api_v1_bulk_issue_rolls_back_skipped_exhausted_item_only(monkeypatch, tmp_path):
+    client, SessionLocal, token = _setup_sqlite_api_app(monkeypatch, tmp_path)
+
+    from fakturek.models import Invoice, InvoiceSeries
+
+    with SessionLocal() as db:
+        stale_default = InvoiceSeries(
+            id=1,
+            subject_id=1,
+            name="default",
+            prefix="",
+            pad_length=4,
+            last_counter=12,
+            last_counter_year=2026,
+        )
+        valid_series = InvoiceSeries(
+            id=2,
+            subject_id=1,
+            name="bulk-valid",
+            prefix="GOOD",
+            pad_length=4,
+            last_counter=2,
+            last_counter_year=2026,
+        )
+        observed_max = db.get(Invoice, 2)
+        observed_max.number = "2026-2147483647"
+        observed_max.series_id = 1
+        valid_draft = Invoice(
+            id=4,
+            subject_id=1,
+            contact_id=1,
+            series_id=2,
+            number="DRAFT-4",
+            status="draft",
+            document_type="invoice",
+            issue_date=date(2026, 3, 12),
+            due_date=date(2026, 3, 26),
+            currency="CZK",
+            total_cents=5_000,
+            discount_cents=0,
+            rounding_adjustment_cents=0,
+            payment_method="bank_transfer",
+            buyer_name_cache="Acme Client a.s.",
+        )
+        db.add_all([stale_default, valid_series, valid_draft])
+        db.commit()
+
+    response = client.post(
+        "/api/v1/subjects/1/invoices/bulk-action",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"action": "issue", "invoice_ids": [1, 4]},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["changed_count"] == 1
+    assert payload["skipped_count"] == 1
+    assert payload["items"][0]["invoice_id"] == 1
+    assert payload["items"][0]["result"] == "skipped"
+    assert "vyčerpaná" in payload["items"][0]["message"]
+    assert payload["items"][1]["invoice_id"] == 4
+    assert payload["items"][1]["result"] == "changed"
+
+    with SessionLocal() as db:
+        skipped = db.get(Invoice, 1)
+        succeeded = db.get(Invoice, 4)
+        stale_default = db.get(InvoiceSeries, 1)
+        valid_series = db.get(InvoiceSeries, 2)
+        assert skipped.status == "draft"
+        assert skipped.number == "DRAFT-1"
+        assert skipped.series_id is None
+        assert stale_default.last_counter == 12
+        assert stale_default.last_counter_year == 2026
+        assert succeeded.status == "issued"
+        assert succeeded.number == "2026-GOOD-0003"
+        assert succeeded.series_id == 2
+        assert valid_series.last_counter == 3
+        assert valid_series.last_counter_year == 2026
+
+    _reset_settings_and_db()
+
+
 def test_api_v1_phase7_manual_payment_crud(monkeypatch, tmp_path):
     client, SessionLocal, token = _setup_sqlite_api_app(monkeypatch, tmp_path)
 

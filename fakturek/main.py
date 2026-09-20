@@ -65,6 +65,11 @@ from fakturek.banking import (
     variable_symbol_from_invoice_number,
 )
 from fakturek.bank_account_lock import lock_subject_bank_account_mutations
+from fakturek.invoice_numbering import (
+    INVOICE_SERIES_EXHAUSTED_LABEL,
+    InvoiceSeriesCounterExhausted,
+    next_invoice_series_counter,
+)
 from fakturek.bank_sync import (
     BankSyncError,
     EMAIL_BANK_PARSER_OPTIONS,
@@ -140,6 +145,15 @@ from fakturek.native_backup_v2 import (
     build_native_backup_v2_import_plan,
     preview_native_backup_v2_import,
     process_native_backup_v2_import,
+)
+from fakturek.native_backup_v3 import (
+    MAX_INVOICE_SERIES as NATIVE_BACKUP_V3_MAX_INVOICE_SERIES,
+    MEDIA_TYPE as NATIVE_BACKUP_V3_MEDIA_TYPE,
+    SOURCE as NATIVE_BACKUP_V3_SOURCE,
+    build_native_backup_v3_bytes,
+    build_native_backup_v3_import_plan,
+    preview_native_backup_v3_import,
+    process_native_backup_v3_import,
 )
 from fakturek.catalog_csv import (
     MAX_ROWS as CATALOG_CSV_MAX_ROWS,
@@ -465,6 +479,7 @@ def create_app() -> FastAPI:
             "/exports/catalog-items.csv",
             "/exports/native-backup.zip",
             "/exports/native-backup-v2.zip",
+            "/exports/native-backup-v3.zip",
         }:
             return True
         return re.fullmatch(r"/invoices/\d+/(pdf|isdoc|cash-receipt/pdf)", current) is not None
@@ -10602,9 +10617,12 @@ def create_app() -> FastAPI:
                 last_year = int(series.last_counter_year) if getattr(series, "last_counter_year", None) else None
             except Exception:
                 last_year = None
-            next_counter = 1 if last_year != number_year else int(series.last_counter or 0) + 1
             try:
+                current = int(series.last_counter or 0) if last_year == number_year else 0
+                next_counter = next_invoice_series_counter(current)
                 return _format_invoice_number(series, next_counter, year=number_year)
+            except InvoiceSeriesCounterExhausted:
+                return INVOICE_SERIES_EXHAUSTED_LABEL
             except Exception:
                 return "Přidělí se při vystavení"
 
@@ -10737,7 +10755,12 @@ def create_app() -> FastAPI:
             base_counter = 0 if last_year != number_year else int(series.last_counter or 0)
 
             for offset in range(1, 1001):
-                next_counter = int(base_counter) + offset
+                try:
+                    next_counter = next_invoice_series_counter(base_counter, offset=offset)
+                except InvoiceSeriesCounterExhausted as exc:
+                    raise InvoiceSeriesCounterExhausted(
+                        "Číselná řada je vyčerpaná; další číslo nelze přidělit."
+                    ) from exc
                 candidate = _format_invoice_number(series, next_counter, year=number_year)
                 exists = db.scalar(
                     select(func.count(Invoice.id)).where(
@@ -14054,6 +14077,80 @@ def create_app() -> FastAPI:
                 },
             )
 
+        @app.get("/exports/native-backup-v3.zip")
+        def export_native_backup_v3(request: Request, db: Session = Depends(get_db)):
+            """Export v3's explicit safe projections including invoice series state."""
+
+            sid = _current_subject_id()
+            if not _current_request_can_export_subject(db, request=request, subject_id=int(sid)):
+                raise HTTPException(status_code=403, detail="Access denied")
+            try:
+                contacts = db.scalars(
+                    select(Contact)
+                    .where(Contact.subject_id == int(sid))
+                    .order_by(Contact.name.asc(), Contact.id.asc())
+                    .limit(NATIVE_BACKUP_MAX_ROWS + 1)
+                ).all()
+                catalog_items = db.scalars(
+                    select(InvoiceCatalogItem)
+                    .where(InvoiceCatalogItem.subject_id == int(sid))
+                    .order_by(
+                        InvoiceCatalogItem.description.asc(),
+                        InvoiceCatalogItem.id.asc(),
+                    )
+                    .limit(NATIVE_BACKUP_MAX_ROWS + 1)
+                ).all()
+                bank_accounts = db.scalars(
+                    select(SubjectBankAccount)
+                    .where(SubjectBankAccount.subject_id == int(sid))
+                    .order_by(
+                        SubjectBankAccount.sort_order.asc(),
+                        SubjectBankAccount.id.asc(),
+                    )
+                    .limit(NATIVE_BACKUP_V2_MAX_BANK_ACCOUNTS + 1)
+                ).all()
+                invoice_series = db.scalars(
+                    select(InvoiceSeries)
+                    .where(InvoiceSeries.subject_id == int(sid))
+                    .order_by(InvoiceSeries.name.asc(), InvoiceSeries.id.asc())
+                    .limit(NATIVE_BACKUP_V3_MAX_INVOICE_SERIES + 1)
+                ).all()
+                max_upload_bytes = (
+                    max(1, int(getattr(settings, "import_max_upload_mb", 25) or 25))
+                    * 1024
+                    * 1024
+                )
+                payload = build_native_backup_v3_bytes(
+                    contacts=list(contacts),
+                    catalog_items=list(catalog_items),
+                    bank_accounts=list(bank_accounts),
+                    invoice_series=list(invoice_series),
+                    max_rows=NATIVE_BACKUP_MAX_ROWS,
+                    max_member_bytes=max_upload_bytes,
+                    max_archive_bytes=max_upload_bytes,
+                )
+            except ValueError as exc:
+                return HTMLResponse(
+                    content=(
+                        "<h1>Native backup v3 nelze vytvořit</h1>"
+                        f"<p>{escape(str(exc))}</p>"
+                    ),
+                    status_code=413,
+                )
+            except SQLAlchemyError as exc:  # type: ignore[misc]
+                return _render_db_disabled(
+                    request, title="Native backup v3", db_error=str(exc), status_code=500
+                )
+            return Response(
+                content=payload,
+                media_type=NATIVE_BACKUP_V3_MEDIA_TYPE,
+                headers={
+                    "Content-Disposition": _attachment_disposition(
+                        "fakturek-native-backup-v3.zip"
+                    )
+                },
+            )
+
         @app.get("/exports/data.zip")
         def export_data_zip(request: Request, db: Session = Depends(get_db)):
             sid = _current_subject_id()
@@ -14322,6 +14419,10 @@ def create_app() -> FastAPI:
         def export_native_backup_v2_disabled(request: Request):
             return _render_db_disabled(request, title="Native backup v2")
 
+        @app.get("/exports/native-backup-v3.zip")
+        def export_native_backup_v3_disabled(request: Request):
+            return _render_db_disabled(request, title="Native backup v3")
+
         @app.get("/exports/data.zip")
         def export_data_zip_disabled(request: Request):
             return _render_db_disabled(request, title="Export dat")
@@ -14352,6 +14453,12 @@ def create_app() -> FastAPI:
             "label": "Fakturek native backup v2",
             "description": "Bezpečná nativní záloha kontaktů, katalogu a bankovních účtů. Neobsahuje tokeny, synchronizaci, transakce ani faktury.",
             "accept": ".zip,application/zip,application/vnd.fakturek.native-backup-v2+zip",
+        },
+        {
+            "value": NATIVE_BACKUP_V3_SOURCE,
+            "label": "Fakturek native backup v3",
+            "description": "Bezpečná nativní záloha kontaktů, katalogu, bankovních účtů a číselných řad. Neobsahuje faktury, platby, tokeny, synchronizaci ani transakce.",
+            "accept": ".zip,application/zip,application/vnd.fakturek.native-backup-v3+zip",
         },
         {
             "value": "fakturoid",
@@ -14606,9 +14713,14 @@ def create_app() -> FastAPI:
 
             is_catalog_csv_upload = str(source) == CATALOG_CSV_SOURCE
             is_native_backup_v2_upload = str(source) == NATIVE_BACKUP_V2_SOURCE
-            is_idempotent_upload = is_catalog_csv_upload or is_native_backup_v2_upload
+            is_native_backup_v3_upload = str(source) == NATIVE_BACKUP_V3_SOURCE
+            is_idempotent_upload = (
+                is_catalog_csv_upload
+                or is_native_backup_v2_upload
+                or is_native_backup_v3_upload
+            )
             upload_dedupe_key = str(sha256_hex) if is_idempotent_upload else None
-            # File-level idempotence: catalog CSV and native backup v2 have a database
+            # File-level idempotence: catalog CSV and native backups have a database
             # uniqueness claim so two simultaneous uploads cannot create two
             # runs after both requests observed no predecessor.
             try:
@@ -14632,6 +14744,39 @@ def create_app() -> FastAPI:
                 except Exception:
                     pass
                 return _render_db_disabled(request, title="Export/Import", db_error=str(exc), status_code=503)
+
+            if (
+                existing is not None
+                and is_native_backup_v3_upload
+                and str(getattr(existing, "status", "") or "") == "finished"
+            ):
+                # A completed restore is historical audit data, not a permanent
+                # prohibition on restoring the same saved backup after master
+                # data is later deleted. Release only its upload claim; active
+                # runs with the same bytes remain deduplicated.
+                try:
+                    db.execute(
+                        update(ImportRun)
+                        .where(ImportRun.id == int(existing.id))
+                        .where(ImportRun.status == "finished")
+                        .where(ImportRun.upload_dedupe_key == upload_dedupe_key)
+                        .values(upload_dedupe_key=None)
+                        .execution_options(synchronize_session=False)
+                    )
+                    db.commit()
+                    existing = None
+                except SQLAlchemyError as exc:  # type: ignore[misc]
+                    db.rollback()
+                    try:
+                        tmp_path.unlink(missing_ok=True)  # type: ignore[arg-type]
+                    except Exception:
+                        pass
+                    return _render_db_disabled(
+                        request,
+                        title="Export/Import",
+                        db_error=str(exc),
+                        status_code=503,
+                    )
 
             if existing is not None:
                 try:
@@ -14819,13 +14964,17 @@ def create_app() -> FastAPI:
             is_native_backup_v2 = (
                 str(getattr(run, "source", "") or "").strip().lower() == NATIVE_BACKUP_V2_SOURCE
             )
+            is_native_backup_v3 = (
+                str(getattr(run, "source", "") or "").strip().lower() == NATIVE_BACKUP_V3_SOURCE
+            )
             is_catalog_csv = (
                 str(getattr(run, "source", "") or "").strip().lower() == CATALOG_CSV_SOURCE
             )
             native_plan = None
             native_v2_plan = None
+            native_v3_plan = None
             catalog_csv_plan = None
-            if is_native_backup or is_native_backup_v2 or is_catalog_csv:
+            if is_native_backup or is_native_backup_v2 or is_native_backup_v3 or is_catalog_csv:
                 # Validate every native member before changing even the run state.
                 # Apply this exact immutable plan after the atomic run claim so
                 # preview and processing cannot disagree about earlier rows.
@@ -14865,6 +15014,22 @@ def create_app() -> FastAPI:
                             max_upload_bytes=max_upload_bytes,
                             plan=native_v2_plan,
                         )
+                    elif is_native_backup_v3:
+                        native_v3_plan = build_native_backup_v3_import_plan(
+                            db,
+                            run=run,
+                            subject_id=int(sid),
+                            import_storage_root=import_storage_root,
+                            max_upload_bytes=max_upload_bytes,
+                        )
+                        preview_native_backup_v3_import(
+                            db,
+                            run=run,
+                            subject_id=int(sid),
+                            import_storage_root=import_storage_root,
+                            max_upload_bytes=max_upload_bytes,
+                            plan=native_v3_plan,
+                        )
                     else:
                         catalog_csv_plan = build_catalog_csv_import_plan(
                             db,
@@ -14893,13 +15058,15 @@ def create_app() -> FastAPI:
                                     "native_backup_v1"
                                     if is_native_backup
                                     else (
-                                        "native_backup_v2"
+                                        "native_backup_v3"
+                                        if is_native_backup_v3
+                                        else "native_backup_v2"
                                         if is_native_backup_v2
                                         else "catalog_csv_v1"
                                     )
                                 ),
                                 "error": str(exc)
-                                if is_native_backup or is_native_backup_v2
+                                if is_native_backup or is_native_backup_v2 or is_native_backup_v3
                                 else "Catalog CSV is invalid or unavailable.",
                             }
                         )
@@ -14950,6 +15117,15 @@ def create_app() -> FastAPI:
                         max_upload_bytes=max_upload_bytes,
                         plan=native_v2_plan,
                     )
+                elif is_native_backup_v3:
+                    summary = process_native_backup_v3_import(
+                        db,
+                        run=run,
+                        subject_id=int(sid),
+                        import_storage_root=import_storage_root,
+                        max_upload_bytes=max_upload_bytes,
+                        plan=native_v3_plan,
+                    )
                 elif is_catalog_csv:
                     summary = process_catalog_csv_import(
                         db,
@@ -14994,7 +15170,9 @@ def create_app() -> FastAPI:
                         failed_run.summary_json = summary_to_json(
                             {
                                 "phase": (
-                                    "native_backup_v2"
+                                    "native_backup_v3"
+                                    if is_native_backup_v3
+                                    else "native_backup_v2"
                                     if is_native_backup_v2
                                     else ("catalog_csv_v1" if is_catalog_csv else 25)
                                 ),
@@ -15074,6 +15252,15 @@ def create_app() -> FastAPI:
                             import_storage_root=import_storage_root,
                             max_upload_bytes=max_upload_bytes,
                         )
+                    elif source_value == NATIVE_BACKUP_V3_SOURCE:
+                        max_upload_bytes = max(1, int(getattr(settings, "import_max_upload_mb", 25) or 25)) * 1024 * 1024
+                        preview = preview_native_backup_v3_import(
+                            db,
+                            run=run,
+                            subject_id=int(sid),
+                            import_storage_root=import_storage_root,
+                            max_upload_bytes=max_upload_bytes,
+                        )
                     elif source_value == CATALOG_CSV_SOURCE:
                         max_upload_bytes = max(1, int(getattr(settings, "import_max_upload_mb", 25) or 25)) * 1024 * 1024
                         preview = preview_catalog_csv_import(
@@ -15099,11 +15286,13 @@ def create_app() -> FastAPI:
                         else str(exc)
                     )
 
-            strict_preview_failed = preview_error is not None and source_value in {
+            strict_source = source_value in {
                 NATIVE_BACKUP_SOURCE,
                 NATIVE_BACKUP_V2_SOURCE,
+                NATIVE_BACKUP_V3_SOURCE,
                 CATALOG_CSV_SOURCE,
             }
+            strict_preview_failed = preview_error is not None and strict_source
             can_process = (
                 str(getattr(run, "status", "") or "") in {"uploaded", "error"}
                 and not strict_preview_failed
@@ -18598,6 +18787,9 @@ def create_app() -> FastAPI:
 
                 db.commit()
                 db.refresh(invoice)
+            except InvoiceSeriesCounterExhausted as exc:
+                db.rollback()
+                return _render_new_editor(error=str(exc), status_code=409)
             except SQLAlchemyError as exc:  # type: ignore[misc]
                 db.rollback()
                 return _render_db_disabled(request, title=INVOICE_NEW_TITLE, db_error=str(exc))
@@ -20840,6 +21032,15 @@ def create_app() -> FastAPI:
                     series_id=int(series.id),
                     invoice_id=int(invoice.id),
                     issue_date=invoice.issue_date,
+                )
+            except InvoiceSeriesCounterExhausted as exc:
+                db.rollback()
+                return _render_invoice_detail(
+                    request=request,
+                    db=db,
+                    invoice_id=invoice_id,
+                    error=str(exc),
+                    status_code=409,
                 )
             except Exception as exc:
                 db.rollback()
