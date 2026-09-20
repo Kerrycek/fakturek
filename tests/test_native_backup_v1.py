@@ -174,6 +174,16 @@ def test_native_backup_export_and_round_trip_are_scoped_and_idempotent(monkeypat
     detail = client.get(f"/imports/{run_id}")
     assert "Native backup v1" in detail.text
     assert "verified" in detail.text
+    assert "Spustit import" in detail.text
+    with SessionLocal() as db:
+        from fakturek.models import ImportRun
+
+        uploaded_run = db.get(ImportRun, run_id)
+        assert uploaded_run is not None
+        uploaded_run.status = "error"
+        db.commit()
+    assert "Spustit import" in client.get(f"/imports/{run_id}").text
+
     with SessionLocal() as db:
         from fakturek.models import ImportRun
         from fakturek.native_backup import process_native_backup_import
@@ -252,11 +262,78 @@ def test_native_backup_rejects_unsafe_or_invalid_archives_before_processing(
     run_id = _upload(client, out.getvalue())
     detail = client.get(f"/imports/{run_id}")
     assert "Preview selhalo" in detail.text
-    client.post(f"/imports/{run_id}/process", follow_redirects=False)
+    assert "Import nelze spustit" in detail.text
+    assert "Spustit import" not in detail.text
+    assert f'action="/imports/{run_id}/process"' not in detail.text
+    processed = client.post(f"/imports/{run_id}/process", follow_redirects=False)
+    assert processed.status_code == 303
+    assert processed.headers["location"] == f"/imports/{run_id}?error=1"
     with SessionLocal() as db:
-        from fakturek.models import Contact
+        from fakturek.models import Contact, ImportRun
 
+        assert db.get(ImportRun, run_id).status == "error"
         assert db.query(Contact).filter_by(subject_id=1).count() == 1
+    retry_detail = client.get(f"/imports/{run_id}")
+    assert "Import nelze spustit" in retry_detail.text
+    assert "Spustit import" not in retry_detail.text
+    _reset()
+
+
+def test_legacy_preview_error_keeps_retry_action_available(monkeypatch, tmp_path):
+    client, SessionLocal, _import_root = _setup(monkeypatch, tmp_path)
+    with SessionLocal() as db:
+        from fakturek.models import ImportRun
+
+        run = ImportRun(
+            subject_id=1,
+            source="fakturoid",
+            status="error",
+            file_name="missing.zip",
+            file_path="subject-1/missing.zip",
+            file_sha256="0" * 64,
+        )
+        db.add(run)
+        db.commit()
+        run_id = int(run.id)
+
+    detail = client.get(f"/imports/{run_id}")
+    assert "Preview selhalo" in detail.text
+    assert "Spustit import" in detail.text
+    assert "Import nelze spustit" not in detail.text
+    _reset()
+
+
+def test_strict_import_detail_and_process_are_tenant_scoped(monkeypatch, tmp_path):
+    client, SessionLocal, import_root = _setup(monkeypatch, tmp_path)
+    payload = _manifest_zip(contacts=b'{"name":"Tenant two"}\n')
+    with SessionLocal() as db:
+        from fakturek.models import ImportRun
+
+        run = ImportRun(
+            subject_id=2,
+            source="fakturek_native_v1",
+            status="uploaded",
+            file_name="tenant-two.zip",
+            file_sha256=hashlib.sha256(payload).hexdigest(),
+            file_size_bytes=len(payload),
+            mime_type="application/zip",
+        )
+        db.add(run)
+        db.flush()
+        stored = import_root / f"subject-2/run-{run.id}.zip"
+        stored.parent.mkdir(parents=True, exist_ok=True)
+        stored.write_bytes(payload)
+        run.file_path = stored.relative_to(import_root).as_posix()
+        db.commit()
+        run_id = int(run.id)
+
+    assert client.get(f"/imports/{run_id}").status_code == 404
+    assert client.post(f"/imports/{run_id}/process").status_code == 404
+    with SessionLocal() as db:
+        from fakturek.models import Contact, ImportRun
+
+        assert db.get(ImportRun, run_id).status == "uploaded"
+        assert db.query(Contact).filter_by(subject_id=2).count() == 0
     _reset()
 
 
