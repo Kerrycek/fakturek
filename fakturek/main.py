@@ -64,6 +64,7 @@ from fakturek.banking import (
     resolve_bank_account,
     variable_symbol_from_invoice_number,
 )
+from fakturek.bank_account_lock import lock_subject_bank_account_mutations
 from fakturek.bank_sync import (
     BankSyncError,
     EMAIL_BANK_PARSER_OPTIONS,
@@ -130,6 +131,15 @@ from fakturek.native_backup import (
     build_native_import_plan,
     preview_native_backup_import,
     process_native_backup_import,
+)
+from fakturek.native_backup_v2 import (
+    MAX_BANK_ACCOUNTS as NATIVE_BACKUP_V2_MAX_BANK_ACCOUNTS,
+    MEDIA_TYPE as NATIVE_BACKUP_V2_MEDIA_TYPE,
+    SOURCE as NATIVE_BACKUP_V2_SOURCE,
+    build_native_backup_v2_bytes,
+    build_native_backup_v2_import_plan,
+    preview_native_backup_v2_import,
+    process_native_backup_v2_import,
 )
 from fakturek.catalog_csv import (
     MAX_ROWS as CATALOG_CSV_MAX_ROWS,
@@ -454,6 +464,7 @@ def create_app() -> FastAPI:
             "/exports/invoices",
             "/exports/catalog-items.csv",
             "/exports/native-backup.zip",
+            "/exports/native-backup-v2.zip",
         }:
             return True
         return re.fullmatch(r"/invoices/\d+/(pdf|isdoc|cash-receipt/pdf)", current) is not None
@@ -5844,6 +5855,21 @@ def create_app() -> FastAPI:
             if not legacy_account:
                 return []
 
+            lock_subject_bank_account_mutations(db, subject_id=int(subject.id))
+            rows = db.scalars(
+                select(SubjectBankAccount)
+                .where(SubjectBankAccount.subject_id == int(subject.id))
+                .order_by(
+                    SubjectBankAccount.is_default.desc(),
+                    SubjectBankAccount.sort_order.asc(),
+                    SubjectBankAccount.id.asc(),
+                )
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            ).all()
+            if rows:
+                return rows
+
             try:
                 payload = resolve_bank_account(
                     account_number=legacy_account,
@@ -5880,7 +5906,13 @@ def create_app() -> FastAPI:
             _sync_subject_legacy_bank_account(subject, rows)
             return rows
 
-        def _list_subject_bank_accounts(db: Session, *, subject_id: int, ensure_bootstrap: bool = True) -> list[SubjectBankAccount]:
+        def _list_subject_bank_accounts(
+            db: Session,
+            *,
+            subject_id: int,
+            ensure_bootstrap: bool = True,
+            for_update: bool = False,
+        ) -> list[SubjectBankAccount]:
             try:
                 subject = db.get(Subject, int(subject_id)) if ensure_bootstrap else None
                 if ensure_bootstrap and subject is not None:
@@ -5890,16 +5922,22 @@ def create_app() -> FastAPI:
                             db.flush()
                         except SQLAlchemyError:
                             pass
-                return db.scalars(
+                stmt = (
                     select(SubjectBankAccount)
                     .where(SubjectBankAccount.subject_id == int(subject_id))
                     .order_by(SubjectBankAccount.is_default.desc(), SubjectBankAccount.sort_order.asc(), SubjectBankAccount.id.asc())
-                ).all()
+                )
+                if for_update:
+                    stmt = stmt.with_for_update().execution_options(populate_existing=True)
+                return db.scalars(stmt).all()
             except SQLAlchemyError:
                 return []
 
         def _set_default_subject_bank_account(db: Session, *, subject_id: int, account_id: int) -> SubjectBankAccount | None:
-            rows = _list_subject_bank_accounts(db, subject_id=int(subject_id))
+            lock_subject_bank_account_mutations(db, subject_id=int(subject_id))
+            rows = _list_subject_bank_accounts(db, subject_id=int(subject_id), for_update=True)
+            if not any(int(row.id) == int(account_id) for row in rows):
+                return None
             selected: SubjectBankAccount | None = None
             for idx, row in enumerate(rows, start=1):
                 is_selected = int(row.id) == int(account_id)
@@ -7757,6 +7795,46 @@ def create_app() -> FastAPI:
                 return today_value, today_value
             return max(cursor_date - timedelta(days=BANK_SYNC_OVERLAP_DAYS), today_value - timedelta(days=365)), today_value
 
+        def _payment_sync_configuration_snapshot(account: SubjectBankAccount) -> tuple[object, ...]:
+            """Return every account value that can change a sync run's meaning.
+
+            The snapshot is deliberately taken without a database lock.  Fetching
+            from a bank (and parsing its response) must not hold a subject lock;
+            the snapshot is checked again after the lock is acquired.
+            """
+            return (
+                _normalize_payment_sync_provider(getattr(account, "payment_sync_provider", None)),
+                bool(getattr(account, "payment_sync_enabled", False)),
+                bool(getattr(account, "payment_sync_auto_pair", True)),
+                getattr(account, "fio_api_token", None),
+                getattr(account, "payment_sync_cursor_date", None),
+                str(getattr(account, "payment_sync_last_email_uid", "") or "").strip(),
+                _normalize_payment_sync_email_parser(getattr(account, "payment_sync_email_parser", None)),
+                str(getattr(account, "payment_sync_email_sender_filter", "") or "").strip().lower(),
+                str(getattr(account, "payment_sync_email_subject_filter", "") or "").strip().lower(),
+                str(getattr(account, "payment_sync_alert_localpart", "") or "").strip(),
+            )
+
+        def _lock_bank_account_sync_configuration(
+            db: Session,
+            *,
+            account: SubjectBankAccount,
+            snapshot: tuple[object, ...],
+        ) -> SubjectBankAccount | None:
+            """Lock and refresh an account only after external sync work is done."""
+            lock_subject_bank_account_mutations(db, subject_id=int(account.subject_id))
+            refreshed = db.scalar(
+                select(SubjectBankAccount)
+                .where(SubjectBankAccount.id == int(account.id))
+                .where(SubjectBankAccount.subject_id == int(account.subject_id))
+                .limit(1)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if refreshed is None or _payment_sync_configuration_snapshot(refreshed) != snapshot:
+                return None
+            return refreshed
+
         def _refresh_payment_sync_checkpoints(
             account: SubjectBankAccount,
             *,
@@ -8180,6 +8258,7 @@ def create_app() -> FastAPI:
             *,
             account: SubjectBankAccount,
             result: dict[str, object],
+            snapshot: tuple[object, ...],
             request: Request | None = None,
         ) -> dict[str, object]:
             imap_host = str(getattr(settings, "payment_sync_imap_host", "") or "").strip()
@@ -8188,6 +8267,10 @@ def create_app() -> FastAPI:
             parser_name = _normalize_payment_sync_email_parser(getattr(account, "payment_sync_email_parser", None))
             auto_pair = bool(getattr(account, "payment_sync_auto_pair", True))
             if not imap_host or not imap_username or not imap_password:
+                account = _lock_bank_account_sync_configuration(db, account=account, snapshot=snapshot)
+                if account is None:
+                    return result
+                account.payment_sync_last_checked_at = utc_now()
                 account.payment_sync_last_error = "IMAP schránka pro bankovní notifikace zatím není nastavená."
                 db.add(account)
                 return result
@@ -8213,11 +8296,27 @@ def create_app() -> FastAPI:
                     "IMAP bank sync failed for bank account %s",
                     getattr(account, "id", "?"),
                 )
+                account = _lock_bank_account_sync_configuration(db, account=account, snapshot=snapshot)
+                if account is None:
+                    return result
+                account.payment_sync_last_checked_at = utc_now()
                 account.payment_sync_last_error = safe_bank_sync_error_message(exc)
                 result["errors"].append(account.payment_sync_last_error)
                 db.add(account)
                 return result
 
+            account = _lock_bank_account_sync_configuration(db, account=account, snapshot=snapshot)
+            if account is None:
+                return result
+            account.payment_sync_last_checked_at = utc_now()
+            # All database effects, including a baseline UID, happen only after
+            # the authoritative configuration check above.
+            parser_name = _normalize_payment_sync_email_parser(getattr(account, "payment_sync_email_parser", None))
+            auto_pair = bool(getattr(account, "payment_sync_auto_pair", True))
+            sender_filter = str(getattr(account, "payment_sync_email_sender_filter", "") or "").strip().lower()
+            subject_filter = str(getattr(account, "payment_sync_email_subject_filter", "") or "").strip().lower()
+            recipient_filter = _payment_sync_alert_email_for_account(account).strip().lower()
+            previous_last_email_uid = str(getattr(account, "payment_sync_last_email_uid", "") or "").strip()
             result["fetched"] = len(imported_emails)
             highest_uid = previous_last_email_uid
 
@@ -8331,6 +8430,7 @@ def create_app() -> FastAPI:
             account: SubjectBankAccount,
             request: Request | None = None,
         ) -> dict[str, object]:
+            snapshot = _payment_sync_configuration_snapshot(account)
             provider = _normalize_payment_sync_provider(getattr(account, "payment_sync_provider", None))
             enabled = bool(getattr(account, "payment_sync_enabled", False))
             auto_pair = bool(getattr(account, "payment_sync_auto_pair", True))
@@ -8346,25 +8446,43 @@ def create_app() -> FastAPI:
                 "errors": [],
             }
 
-            account.payment_sync_last_checked_at = now_utc
-            db.add(account)
-
             if not enabled or provider == "none":
+                account = _lock_bank_account_sync_configuration(db, account=account, snapshot=snapshot)
+                if account is None:
+                    return result
+                account.payment_sync_last_checked_at = now_utc
                 account.payment_sync_last_error = None
+                db.add(account)
                 return result
 
             if provider == "email_bank":
-                return _sync_subject_bank_account_email(db, account=account, result=result, request=request)
+                return _sync_subject_bank_account_email(
+                    db,
+                    account=account,
+                    result=result,
+                    snapshot=snapshot,
+                    request=request,
+                )
 
             if provider != "fio_api":
+                account = _lock_bank_account_sync_configuration(db, account=account, snapshot=snapshot)
+                if account is None:
+                    return result
+                account.payment_sync_last_checked_at = now_utc
                 account.payment_sync_last_error = "Tento provider zatím neumíme synchronizovat."
                 result["errors"].append(str(account.payment_sync_last_error))
+                db.add(account)
                 return result
 
             token = _decode_fio_api_token(getattr(account, "fio_api_token", None))
             if not token:
+                account = _lock_bank_account_sync_configuration(db, account=account, snapshot=snapshot)
+                if account is None:
+                    return result
+                account.payment_sync_last_checked_at = now_utc
                 account.payment_sync_last_error = "Chybí Fio API token."
                 result["errors"].append(str(account.payment_sync_last_error))
+                db.add(account)
                 return result
 
             date_from, date_to = _payment_sync_date_window(account)
@@ -8395,6 +8513,10 @@ def create_app() -> FastAPI:
                     "Fio bank sync failed for bank account %s",
                     getattr(account, "id", "?"),
                 )
+                account = _lock_bank_account_sync_configuration(db, account=account, snapshot=snapshot)
+                if account is None:
+                    return result
+                account.payment_sync_last_checked_at = now_utc
                 account.payment_sync_last_error = safe_bank_sync_error_message(exc)
                 result["errors"].append(account.payment_sync_last_error)
                 if auto_pair:
@@ -8405,8 +8527,13 @@ def create_app() -> FastAPI:
                     )
                 return result
 
+            account = _lock_bank_account_sync_configuration(db, account=account, snapshot=snapshot)
+            if account is None:
+                return result
+            account.payment_sync_last_checked_at = now_utc
             result["fetched"] = len(imported_transactions)
             newest_booked_on = date_from
+            auto_pair = bool(getattr(account, "payment_sync_auto_pair", True))
 
             for imported in imported_transactions:
                 if imported.booked_on > newest_booked_on:
@@ -8450,12 +8577,23 @@ def create_app() -> FastAPI:
             subject_id: int | None = None,
             account_id: int | None = None,
         ) -> dict[str, object]:
-            stmt = select(SubjectBankAccount).order_by(SubjectBankAccount.subject_id.asc(), SubjectBankAccount.sort_order.asc(), SubjectBankAccount.id.asc())
+            stmt = (
+                select(SubjectBankAccount.subject_id, SubjectBankAccount.id)
+                .order_by(
+                    SubjectBankAccount.subject_id.asc(),
+                    SubjectBankAccount.sort_order.asc(),
+                    SubjectBankAccount.id.asc(),
+                )
+            )
             if subject_id is not None:
                 stmt = stmt.where(SubjectBankAccount.subject_id == int(subject_id))
             if account_id is not None:
                 stmt = stmt.where(SubjectBankAccount.id == int(account_id))
-            accounts = db.scalars(stmt).all()
+            account_refs = db.execute(stmt).all()
+            # End the read transaction before the first external request too.
+            # A successful account sync takes the subject mutation lock only
+            # after fetching; this commit releases it before the next account.
+            db.commit()
 
             summary = {
                 "accounts": [],
@@ -8467,7 +8605,21 @@ def create_app() -> FastAPI:
                 "skipped_existing": 0,
                 "baseline_seeded": False,
             }
-            for account in accounts:
+            for current_subject_id, current_account_id in account_refs:
+                account = db.scalar(
+                    select(SubjectBankAccount)
+                    .where(SubjectBankAccount.subject_id == int(current_subject_id))
+                    .where(SubjectBankAccount.id == int(current_account_id))
+                    .limit(1)
+                    .execution_options(populate_existing=True)
+                )
+                if account is None:
+                    continue
+                # ``account`` is a fully loaded, detached snapshot for the
+                # pre-I/O phase.  Committing after the fresh SELECT prevents a
+                # read transaction from surviving into the bank request.
+                db.expunge(account)
+                db.commit()
                 account_result = _sync_subject_bank_account(db, account=account, request=request)
                 summary["accounts"].append(account_result)
                 for key in ("fetched", "imported", "matched", "unmatched", "skipped_existing"):
@@ -8475,7 +8627,9 @@ def create_app() -> FastAPI:
                 if account_result.get("baseline_seeded"):
                     summary["baseline_seeded"] = True
                 summary["errors"].extend(list(account_result.get("errors") or []))
-            db.commit()
+                # Do not carry a subject lock (or an SQLite writer lock) into
+                # the next account's network operation.
+                db.commit()
             return summary
 
         def _bank_sync_notice(result: dict[str, object]) -> str:
@@ -11049,8 +11203,14 @@ def create_app() -> FastAPI:
 
                 disabled_sync_count = 0
                 if sole_owned_subject_ids:
+                    sole_owned_subject_ids = sorted(set(sole_owned_subject_ids))
+                    for subject_id in sole_owned_subject_ids:
+                        lock_subject_bank_account_mutations(db, subject_id=int(subject_id))
                     bank_accounts = db.scalars(
-                        select(SubjectBankAccount).where(SubjectBankAccount.subject_id.in_(sole_owned_subject_ids))
+                        select(SubjectBankAccount)
+                        .where(SubjectBankAccount.subject_id.in_(sole_owned_subject_ids))
+                        .with_for_update()
+                        .execution_options(populate_existing=True)
                     ).all()
                     for account in bank_accounts:
                         if bool(getattr(account, "payment_sync_enabled", False)):
@@ -11862,7 +12022,9 @@ def create_app() -> FastAPI:
                 if subject is None:
                     subject = Subject(id=sid)
                     db.add(subject)
-                existing = _list_subject_bank_accounts(db, subject_id=sid)
+                    db.flush()
+                lock_subject_bank_account_mutations(db, subject_id=int(sid))
+                existing = _list_subject_bank_accounts(db, subject_id=sid, for_update=True)
                 account = SubjectBankAccount(
                     subject_id=sid,
                     label=payload.label,
@@ -11899,7 +12061,10 @@ def create_app() -> FastAPI:
                 if account.is_default:
                     _set_default_subject_bank_account(db, subject_id=sid, account_id=int(account.id))
                 else:
-                    _sync_subject_legacy_bank_account(subject, _list_subject_bank_accounts(db, subject_id=sid))
+                    _sync_subject_legacy_bank_account(
+                        subject,
+                        _list_subject_bank_accounts(db, subject_id=sid, for_update=True),
+                    )
                     db.add(subject)
                 db.commit()
             except SQLAlchemyError as exc:
@@ -12041,6 +12206,17 @@ def create_app() -> FastAPI:
                 )
 
             try:
+                lock_subject_bank_account_mutations(db, subject_id=int(sid))
+                account = db.scalar(
+                    select(SubjectBankAccount)
+                    .where(SubjectBankAccount.id == int(account_id))
+                    .where(SubjectBankAccount.subject_id == int(sid))
+                    .limit(1)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+                if account is None:
+                    raise HTTPException(status_code=404, detail="Account not found")
                 was_default = bool(account.is_default)
                 previous_provider = str(getattr(account, "payment_sync_provider", "none") or "none")
                 previous_enabled = bool(getattr(account, "payment_sync_enabled", False))
@@ -12082,7 +12258,11 @@ def create_app() -> FastAPI:
                 if bool(prefill["is_default"]):
                     _set_default_subject_bank_account(db, subject_id=sid, account_id=int(account.id))
                 elif was_default:
-                    remaining = [row for row in _list_subject_bank_accounts(db, subject_id=sid) if int(row.id) != int(account.id)]
+                    remaining = [
+                        row
+                        for row in _list_subject_bank_accounts(db, subject_id=sid, for_update=True)
+                        if int(row.id) != int(account.id)
+                    ]
                     if remaining:
                         _set_default_subject_bank_account(db, subject_id=sid, account_id=int(remaining[0].id))
                     else:
@@ -12092,7 +12272,10 @@ def create_app() -> FastAPI:
 
                 refreshed_subject = db.get(Subject, sid)
                 if refreshed_subject is not None:
-                    _sync_subject_legacy_bank_account(refreshed_subject, _list_subject_bank_accounts(db, subject_id=sid))
+                    _sync_subject_legacy_bank_account(
+                        refreshed_subject,
+                        _list_subject_bank_accounts(db, subject_id=sid, for_update=True),
+                    )
                     db.add(refreshed_subject)
                 db.commit()
             except SQLAlchemyError as exc:
@@ -12758,7 +12941,12 @@ def create_app() -> FastAPI:
             if account is None:
                 return JSONResponse(status_code=404, content={"detail": "Account not found"})
             try:
-                _set_default_subject_bank_account(db, subject_id=sid, account_id=int(account_id))
+                selected = _set_default_subject_bank_account(
+                    db, subject_id=sid, account_id=int(account_id)
+                )
+                if selected is None:
+                    db.rollback()
+                    return JSONResponse(status_code=404, content={"detail": "Account not found"})
                 db.commit()
             except SQLAlchemyError as exc:
                 db.rollback()
@@ -12783,14 +12971,35 @@ def create_app() -> FastAPI:
             if account is None:
                 return JSONResponse(status_code=404, content={"detail": "Account not found"})
             try:
-                invoices = db.scalars(select(Invoice).where(Invoice.bank_account_id == int(account.id))).all()
+                lock_subject_bank_account_mutations(db, subject_id=int(sid))
+                account = db.scalar(
+                    select(SubjectBankAccount)
+                    .where(SubjectBankAccount.id == int(account_id))
+                    .where(SubjectBankAccount.subject_id == int(sid))
+                    .limit(1)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+                if account is None:
+                    raise HTTPException(status_code=404, detail="Account not found")
+                invoices = db.scalars(
+                    select(Invoice)
+                    .where(Invoice.bank_account_id == int(account.id))
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                ).all()
                 for inv in invoices:
                     inv.bank_account_id = None
                     db.add(inv)
                 was_default = bool(account.is_default)
                 db.delete(account)
                 db.flush()
-                remaining = _list_subject_bank_accounts(db, subject_id=sid, ensure_bootstrap=False)
+                remaining = _list_subject_bank_accounts(
+                    db,
+                    subject_id=sid,
+                    ensure_bootstrap=False,
+                    for_update=True,
+                )
                 if was_default and remaining:
                     _set_default_subject_bank_account(db, subject_id=sid, account_id=int(remaining[0].id))
                 else:
@@ -13785,6 +13994,66 @@ def create_app() -> FastAPI:
                 headers={"Content-Disposition": _attachment_disposition("fakturek-native-backup-v1.zip")},
             )
 
+        @app.get("/exports/native-backup-v2.zip")
+        def export_native_backup_v2(request: Request, db: Session = Depends(get_db)):
+            """Export v2 portable data; its account projection excludes all sync state."""
+            sid = _current_subject_id()
+            try:
+                contacts = db.scalars(
+                    select(Contact)
+                    .where(Contact.subject_id == int(sid))
+                    .order_by(Contact.name.asc(), Contact.id.asc())
+                    .limit(NATIVE_BACKUP_MAX_ROWS + 1)
+                ).all()
+                catalog_items = db.scalars(
+                    select(InvoiceCatalogItem)
+                    .where(InvoiceCatalogItem.subject_id == int(sid))
+                    .order_by(InvoiceCatalogItem.description.asc(), InvoiceCatalogItem.id.asc())
+                    .limit(NATIVE_BACKUP_MAX_ROWS + 1)
+                ).all()
+                bank_accounts = db.scalars(
+                    select(SubjectBankAccount)
+                    .where(SubjectBankAccount.subject_id == int(sid))
+                    .order_by(
+                        SubjectBankAccount.sort_order.asc(), SubjectBankAccount.id.asc()
+                    )
+                    .limit(NATIVE_BACKUP_V2_MAX_BANK_ACCOUNTS + 1)
+                ).all()
+                max_upload_bytes = (
+                    max(1, int(getattr(settings, "import_max_upload_mb", 25) or 25))
+                    * 1024
+                    * 1024
+                )
+                payload = build_native_backup_v2_bytes(
+                    contacts=list(contacts),
+                    catalog_items=list(catalog_items),
+                    bank_accounts=list(bank_accounts),
+                    max_rows=NATIVE_BACKUP_MAX_ROWS,
+                    max_member_bytes=max_upload_bytes,
+                    max_archive_bytes=max_upload_bytes,
+                )
+            except ValueError as exc:
+                return HTMLResponse(
+                    content=(
+                        "<h1>Native backup v2 nelze vytvořit</h1>"
+                        f"<p>{escape(str(exc))}</p>"
+                    ),
+                    status_code=413,
+                )
+            except SQLAlchemyError as exc:  # type: ignore[misc]
+                return _render_db_disabled(
+                    request, title="Native backup v2", db_error=str(exc), status_code=500
+                )
+            return Response(
+                content=payload,
+                media_type=NATIVE_BACKUP_V2_MEDIA_TYPE,
+                headers={
+                    "Content-Disposition": _attachment_disposition(
+                        "fakturek-native-backup-v2.zip"
+                    )
+                },
+            )
+
         @app.get("/exports/data.zip")
         def export_data_zip(request: Request, db: Session = Depends(get_db)):
             sid = _current_subject_id()
@@ -14049,6 +14318,10 @@ def create_app() -> FastAPI:
         def export_native_backup_disabled(request: Request):
             return _render_db_disabled(request, title="Native backup")
 
+        @app.get("/exports/native-backup-v2.zip")
+        def export_native_backup_v2_disabled(request: Request):
+            return _render_db_disabled(request, title="Native backup v2")
+
         @app.get("/exports/data.zip")
         def export_data_zip_disabled(request: Request):
             return _render_db_disabled(request, title="Export dat")
@@ -14073,6 +14346,12 @@ def create_app() -> FastAPI:
             "label": "Fakturek native backup v1",
             "description": "Bezpečná nativní záloha Faktureku: kontakty a katalogové položky. Neobsahuje faktury ani platby.",
             "accept": ".zip,application/zip,application/vnd.fakturek.native-backup+zip",
+        },
+        {
+            "value": NATIVE_BACKUP_V2_SOURCE,
+            "label": "Fakturek native backup v2",
+            "description": "Bezpečná nativní záloha kontaktů, katalogu a bankovních účtů. Neobsahuje tokeny, synchronizaci, transakce ani faktury.",
+            "accept": ".zip,application/zip,application/vnd.fakturek.native-backup-v2+zip",
         },
         {
             "value": "fakturoid",
@@ -14326,8 +14605,10 @@ def create_app() -> FastAPI:
                 )
 
             is_catalog_csv_upload = str(source) == CATALOG_CSV_SOURCE
-            upload_dedupe_key = str(sha256_hex) if is_catalog_csv_upload else None
-            # File-level idempotence: catalog CSV additionally has a database
+            is_native_backup_v2_upload = str(source) == NATIVE_BACKUP_V2_SOURCE
+            is_idempotent_upload = is_catalog_csv_upload or is_native_backup_v2_upload
+            upload_dedupe_key = str(sha256_hex) if is_idempotent_upload else None
+            # File-level idempotence: catalog CSV and native backup v2 have a database
             # uniqueness claim so two simultaneous uploads cannot create two
             # runs after both requests observed no predecessor.
             try:
@@ -14338,7 +14619,7 @@ def create_app() -> FastAPI:
                     .order_by(ImportRun.id.desc())
                     .limit(1)
                 )
-                if is_catalog_csv_upload:
+                if is_idempotent_upload:
                     existing_query = existing_query.where(
                         ImportRun.upload_dedupe_key == upload_dedupe_key
                     )
@@ -14390,7 +14671,7 @@ def create_app() -> FastAPI:
                     winner = db.scalar(
                         select(ImportRun)
                         .where(ImportRun.subject_id == int(sid))
-                        .where(ImportRun.source == CATALOG_CSV_SOURCE)
+                        .where(ImportRun.source == str(source))
                         .where(ImportRun.upload_dedupe_key == str(sha256_hex))
                         .order_by(ImportRun.id.desc())
                         .limit(1)
@@ -14535,12 +14816,16 @@ def create_app() -> FastAPI:
             is_native_backup = (
                 str(getattr(run, "source", "") or "").strip().lower() == NATIVE_BACKUP_SOURCE
             )
+            is_native_backup_v2 = (
+                str(getattr(run, "source", "") or "").strip().lower() == NATIVE_BACKUP_V2_SOURCE
+            )
             is_catalog_csv = (
                 str(getattr(run, "source", "") or "").strip().lower() == CATALOG_CSV_SOURCE
             )
             native_plan = None
+            native_v2_plan = None
             catalog_csv_plan = None
-            if is_native_backup or is_catalog_csv:
+            if is_native_backup or is_native_backup_v2 or is_catalog_csv:
                 # Validate every native member before changing even the run state.
                 # Apply this exact immutable plan after the atomic run claim so
                 # preview and processing cannot disagree about earlier rows.
@@ -14563,6 +14848,22 @@ def create_app() -> FastAPI:
                             import_storage_root=import_storage_root,
                             max_upload_bytes=max_upload_bytes,
                             plan=native_plan,
+                        )
+                    elif is_native_backup_v2:
+                        native_v2_plan = build_native_backup_v2_import_plan(
+                            db,
+                            run=run,
+                            subject_id=int(sid),
+                            import_storage_root=import_storage_root,
+                            max_upload_bytes=max_upload_bytes,
+                        )
+                        preview_native_backup_v2_import(
+                            db,
+                            run=run,
+                            subject_id=int(sid),
+                            import_storage_root=import_storage_root,
+                            max_upload_bytes=max_upload_bytes,
+                            plan=native_v2_plan,
                         )
                     else:
                         catalog_csv_plan = build_catalog_csv_import_plan(
@@ -14588,9 +14889,17 @@ def create_app() -> FastAPI:
                         run.finished_at = utc_now()
                         run.summary_json = summary_to_json(
                             {
-                                "phase": "native_backup_v1" if is_native_backup else "catalog_csv_v1",
+                                "phase": (
+                                    "native_backup_v1"
+                                    if is_native_backup
+                                    else (
+                                        "native_backup_v2"
+                                        if is_native_backup_v2
+                                        else "catalog_csv_v1"
+                                    )
+                                ),
                                 "error": str(exc)
-                                if is_native_backup
+                                if is_native_backup or is_native_backup_v2
                                 else "Catalog CSV is invalid or unavailable.",
                             }
                         )
@@ -14631,6 +14940,15 @@ def create_app() -> FastAPI:
                         import_storage_root=import_storage_root,
                         max_upload_bytes=max_upload_bytes,
                         plan=native_plan,
+                    )
+                elif is_native_backup_v2:
+                    summary = process_native_backup_v2_import(
+                        db,
+                        run=run,
+                        subject_id=int(sid),
+                        import_storage_root=import_storage_root,
+                        max_upload_bytes=max_upload_bytes,
+                        plan=native_v2_plan,
                     )
                 elif is_catalog_csv:
                     summary = process_catalog_csv_import(
@@ -14675,7 +14993,11 @@ def create_app() -> FastAPI:
                         failed_run.finished_at = utc_now()
                         failed_run.summary_json = summary_to_json(
                             {
-                                "phase": "catalog_csv_v1" if is_catalog_csv else 25,
+                                "phase": (
+                                    "native_backup_v2"
+                                    if is_native_backup_v2
+                                    else ("catalog_csv_v1" if is_catalog_csv else 25)
+                                ),
                                 "error": "Catalog CSV processing failed."
                                 if is_catalog_csv
                                 else str(exc),
@@ -14737,6 +15059,15 @@ def create_app() -> FastAPI:
                     if source_value == NATIVE_BACKUP_SOURCE:
                         max_upload_bytes = max(1, int(getattr(settings, "import_max_upload_mb", 25) or 25)) * 1024 * 1024
                         preview = preview_native_backup_import(
+                            db,
+                            run=run,
+                            subject_id=int(sid),
+                            import_storage_root=import_storage_root,
+                            max_upload_bytes=max_upload_bytes,
+                        )
+                    elif source_value == NATIVE_BACKUP_V2_SOURCE:
+                        max_upload_bytes = max(1, int(getattr(settings, "import_max_upload_mb", 25) or 25)) * 1024 * 1024
+                        preview = preview_native_backup_v2_import(
                             db,
                             run=run,
                             subject_id=int(sid),

@@ -186,6 +186,99 @@ def test_manual_fio_sync_retries_transport_failure_without_advancing_cursor(monk
     _reset_settings_and_db()
 
 
+def test_manual_fio_sync_does_not_overwrite_checkpoint_reset_during_fetch(monkeypatch, tmp_path):
+    client, SessionLocal = _setup_sqlite_app(monkeypatch, tmp_path)
+
+    def _fetch_after_settings_change(*args, **kwargs):
+        # This separate request represents an administrator saving a new sync
+        # configuration while the bank request is in flight.
+        with SessionLocal() as other_db:
+            from fakturek.models import SubjectBankAccount
+
+            account = other_db.get(SubjectBankAccount, 1)
+            assert account is not None
+            account.payment_sync_cursor_date = date(2031, 1, 2)
+            account.payment_sync_last_error = None
+            other_db.commit()
+        return []
+
+    monkeypatch.setattr("fakturek.main.fetch_fio_transactions", _fetch_after_settings_change)
+    response = client.post("/settings/accounts/1/sync", follow_redirects=False)
+    assert response.status_code == 303
+
+    with SessionLocal() as db:
+        from fakturek.models import BankTransaction, SubjectBankAccount
+
+        account = db.get(SubjectBankAccount, 1)
+        assert account is not None
+        assert account.payment_sync_cursor_date == date(2031, 1, 2)
+        assert account.payment_sync_last_success_at is None
+        assert db.scalar(sqlalchemy.select(sqlalchemy.func.count(BankTransaction.id))) == 0
+    _reset_settings_and_db()
+
+
+def test_internal_multi_account_sync_commits_before_next_bank_fetch(monkeypatch, tmp_path):
+    monkeypatch.setenv("INTERNAL_JOB_TOKEN", "bank-sync-job-token")
+    client, SessionLocal = _setup_sqlite_app(monkeypatch, tmp_path)
+
+    with SessionLocal() as db:
+        from fakturek.models import SubjectBankAccount
+
+        db.add(
+            SubjectBankAccount(
+                id=2,
+                subject_id=1,
+                label="Druhý Fio účet",
+                account_number="2100000002/2010",
+                country="CZ",
+                currency="CZK",
+                sort_order=2,
+                payment_sync_provider="fio_api",
+                payment_sync_enabled=True,
+                payment_sync_auto_pair=True,
+                fio_api_token="test-token-2",
+            )
+        )
+        db.commit()
+
+    from fakturek.db import get_engine
+
+    commits_after_fetch_count: list[int] = []
+    fresh_load_commit_counts: list[int] = []
+    fetched_tokens: list[str] = []
+
+    def _track_commit(_connection):
+        commits_after_fetch_count.append(len(fetched_tokens))
+
+    def _track_account_load(_connection, _cursor, statement, _parameters, _context, _executemany):
+        normalized = " ".join(str(statement).lower().split())
+        if "from subject_bank_accounts" in normalized and "subject_bank_accounts.id =" in normalized:
+            fresh_load_commit_counts.append(len(commits_after_fetch_count))
+
+    sqlalchemy.event.listen(get_engine(), "commit", _track_commit)
+    sqlalchemy.event.listen(get_engine(), "after_cursor_execute", _track_account_load)
+
+    def _fetch(token, **_kwargs):
+        fetched_tokens.append(str(token))
+        assert fresh_load_commit_counts
+        # This must be a commit after the current account's fresh SELECT, not
+        # merely the commit after a previous account.
+        assert len(commits_after_fetch_count) > fresh_load_commit_counts[-1]
+        return []
+
+    monkeypatch.setattr("fakturek.main.fetch_fio_transactions", _fetch)
+    try:
+        response = client.post(
+            "/internal/jobs/bank-sync",
+            headers={"X-Internal-Job-Token": "bank-sync-job-token"},
+        )
+    finally:
+        sqlalchemy.event.remove(get_engine(), "commit", _track_commit)
+        sqlalchemy.event.remove(get_engine(), "after_cursor_execute", _track_account_load)
+
+    assert response.status_code == 200
+    assert fetched_tokens == ["test-token", "test-token-2"]
+    _reset_settings_and_db()
 
 
 def test_settings_account_edit_saves_fio_sync_configuration(monkeypatch, tmp_path):

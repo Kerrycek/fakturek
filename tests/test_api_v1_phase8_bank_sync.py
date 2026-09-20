@@ -492,6 +492,138 @@ def test_api_v1_phase8_import_email_then_reprocess_with_parser(monkeypatch, tmp_
     _reset_settings_and_db()
 
 
+def test_api_v1_fio_sync_does_not_overwrite_checkpoint_reset_during_fetch(monkeypatch, tmp_path):
+    client, SessionLocal, token = _setup_sqlite_api_app(monkeypatch, tmp_path)
+
+    def _fetch_after_settings_change(*args, **kwargs):
+        with SessionLocal() as other_db:
+            from fakturek.models import SubjectBankAccount
+
+            account = other_db.get(SubjectBankAccount, 1)
+            assert account is not None
+            account.payment_sync_cursor_date = date(2031, 1, 2)
+            account.payment_sync_last_error = None
+            other_db.commit()
+        return []
+
+    monkeypatch.setattr("fakturek.api_v1.fetch_fio_transactions", _fetch_after_settings_change)
+    response = client.post(
+        "/api/v1/subjects/1/bank-accounts/1/sync",
+        headers={"Authorization": f"Bearer {token}", "Idempotency-Key": "stale-checkpoint-sync"},
+    )
+    assert response.status_code == 200
+
+    with SessionLocal() as db:
+        from fakturek.models import BankTransaction, SubjectBankAccount
+
+        account = db.get(SubjectBankAccount, 1)
+        assert account is not None
+        assert account.payment_sync_cursor_date == date(2031, 1, 2)
+        assert account.payment_sync_last_success_at is None
+        assert db.scalar(sqlalchemy.select(sqlalchemy.func.count(BankTransaction.id))) == 0
+    _reset_settings_and_db()
+
+
+def test_api_v1_single_account_sync_commits_after_fresh_load_before_fetch(monkeypatch, tmp_path):
+    client, SessionLocal, token = _setup_sqlite_api_app(monkeypatch, tmp_path)
+
+    from fakturek.api_v1 import ApiV1Builder
+    from fakturek.db import get_engine
+
+    commits_after_fetch_count: list[int] = []
+    fresh_load_commit_counts: list[int] = []
+    original_load = ApiV1Builder._load_bank_account_for_subject
+
+    def _track_commit(_connection):
+        commits_after_fetch_count.append(0)
+
+    def _track_fresh_load(self, db, *, subject_id, bank_account_id):
+        account = original_load(self, db, subject_id=subject_id, bank_account_id=bank_account_id)
+        fresh_load_commit_counts.append(len(commits_after_fetch_count))
+        return account
+
+    sqlalchemy.event.listen(get_engine(), "commit", _track_commit)
+    monkeypatch.setattr(ApiV1Builder, "_load_bank_account_for_subject", _track_fresh_load)
+
+    def _fetch(*_args, **_kwargs):
+        assert fresh_load_commit_counts
+        # This is specifically the commit after the endpoint's fresh account
+        # SELECT, rather than an earlier auth/idempotency commit.
+        assert len(commits_after_fetch_count) > fresh_load_commit_counts[-1]
+        with SessionLocal() as writer_db:
+            from fakturek.models import SubjectBankAccount
+
+            account = writer_db.get(SubjectBankAccount, 1)
+            assert account is not None
+            account.label = "Upraveno během bankovního fetchi"
+            writer_db.commit()
+        return []
+
+    monkeypatch.setattr("fakturek.api_v1.fetch_fio_transactions", _fetch)
+    try:
+        response = client.post(
+            "/api/v1/subjects/1/bank-accounts/1/sync",
+            headers={"Authorization": f"Bearer {token}", "Idempotency-Key": "single-account-boundary"},
+        )
+    finally:
+        sqlalchemy.event.remove(get_engine(), "commit", _track_commit)
+
+    assert response.status_code == 200
+    _reset_settings_and_db()
+
+
+def test_api_v1_multi_account_sync_commits_before_next_bank_fetch(monkeypatch, tmp_path):
+    client, SessionLocal, token = _setup_sqlite_api_app(monkeypatch, tmp_path)
+
+    with SessionLocal() as db:
+        from fakturek.models import SubjectBankAccount
+
+        account = db.get(SubjectBankAccount, 2)
+        assert account is not None
+        account.payment_sync_provider = "fio_api"
+        account.payment_sync_enabled = True
+        account.payment_sync_auto_pair = True
+        account.fio_api_token = "test-token-2"
+        db.commit()
+
+    from fakturek.db import get_engine
+
+    commits_after_fetch_count: list[int] = []
+    fresh_load_commit_counts: list[int] = []
+    fetched_tokens: list[str] = []
+
+    def _track_commit(_connection):
+        commits_after_fetch_count.append(len(fetched_tokens))
+
+    def _track_account_load(_connection, _cursor, statement, _parameters, _context, _executemany):
+        normalized = " ".join(str(statement).lower().split())
+        if "from subject_bank_accounts" in normalized and "subject_bank_accounts.id =" in normalized:
+            fresh_load_commit_counts.append(len(commits_after_fetch_count))
+
+    sqlalchemy.event.listen(get_engine(), "commit", _track_commit)
+    sqlalchemy.event.listen(get_engine(), "after_cursor_execute", _track_account_load)
+
+    def _fetch(token, **_kwargs):
+        fetched_tokens.append(str(token))
+        assert fresh_load_commit_counts
+        assert len(commits_after_fetch_count) > fresh_load_commit_counts[-1]
+        return []
+
+    monkeypatch.setattr("fakturek.api_v1.fetch_fio_transactions", _fetch)
+    try:
+        response = client.post(
+            "/api/v1/subjects/1/bank-sync/run",
+            headers={"Authorization": f"Bearer {token}", "Idempotency-Key": "multi-account-boundary"},
+        )
+    finally:
+        sqlalchemy.event.remove(get_engine(), "commit", _track_commit)
+        sqlalchemy.event.remove(get_engine(), "after_cursor_execute", _track_account_load)
+
+    assert response.status_code == 200
+    assert fetched_tokens == ["test-fio-token", "test-token-2"]
+    _reset_settings_and_db()
+
+
 def test_api_v1_phase8_subject_sync_baseline_seeds_email_account(monkeypatch, tmp_path):
     client, SessionLocal, token = _setup_sqlite_api_app(monkeypatch, tmp_path)
 
