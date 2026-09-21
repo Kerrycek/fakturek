@@ -373,6 +373,11 @@ def test_viewer_cannot_open_invoice_or_contact_editors(monkeypatch, tmp_path):
     assert "Na tuhle akci nemáš práva" in contact_response.text
     assert "Úpravy jsou zamčené" in contact_response.text
 
+    upload_response = client.post("/imports", follow_redirects=False)
+    assert upload_response.status_code == 403
+    process_response = client.post("/imports/1/process", follow_redirects=False)
+    assert process_response.status_code == 403
+
     _reset_settings_and_db()
 
 def test_deleting_own_current_non_owner_subject_switches_session(monkeypatch, tmp_path):
@@ -422,6 +427,7 @@ def test_user_without_export_permission_cannot_download_export_endpoints(monkeyp
         ("get", "/contacts/export.csv"),
         ("get", "/invoices/export.csv"),
         ("get", "/exports/data.zip"),
+        ("get", "/exports/contacts.csv"),
         ("get", "/exports/native-backup.zip"),
         ("get", "/exports/native-backup-v2.zip"),
         ("post", "/exports/invoices"),
