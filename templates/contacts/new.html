@@ -27,7 +27,7 @@
       </div>
     {% endif %}
 
-    <form method="post" action="/contacts/new" class="form contact-form contact-new-form">
+    <form method="post" action="/contacts/new" class="form contact-form contact-new-form" data-contact-registry-form>
       {{ csrf_input(request)|safe }}
 
       <section class="registry-lookup-strip contact-lookup-strip">
@@ -38,10 +38,10 @@
         <div class="registry-lookup-controls registry-lookup-controls-three">
           <div class="form-row">
             <label for="ico">IČO</label>
-            <input id="ico" name="ico" value="{{ prefill.ico }}" inputmode="numeric" placeholder="CZ nebo SK IČO" />
+            <input id="ico" name="ico" value="{{ prefill.ico }}" inputmode="numeric" enterkeyhint="search" placeholder="CZ nebo SK IČO" data-contact-registry-ico />
           </div>
-          <button class="btn" type="submit" formmethod="get" formnovalidate name="lookup" value="ares">ARES</button>
-          <button class="btn" type="submit" formmethod="get" formnovalidate name="lookup" value="rpo">RPO (SK)</button>
+          <button class="btn" type="submit" formnovalidate name="lookup" value="ares" data-contact-registry-submit="ares">ARES</button>
+          <button class="btn" type="submit" formnovalidate name="lookup" value="rpo" data-contact-registry-submit="rpo">RPO (SK)</button>
         </div>
       </section>
 
@@ -140,4 +140,5 @@
       </div>
     </form>
   </section>
+  {% include "contacts/_registry_lookup_enter.html" %}
 {% endblock %}

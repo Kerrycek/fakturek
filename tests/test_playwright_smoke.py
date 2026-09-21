@@ -215,11 +215,26 @@ def test_core_app_flow_in_browser(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
             page.fill('input[name="city"]', "Ostrava")
             page.fill('input[name="zip"]', "70030")
             page.select_option('select[name="country"]', "CZ")
+            page.fill('input[name="ico"]', "12345678")
+            page.locator('input[name="ico"]').press("Enter")
+            page.get_by_text("Neplatné IČO.", exact=True).wait_for()
+            assert page.url == f"{base_url}/contacts/new"
+            assert page.locator(".contact-new-page").count() == 1
+            assert page.locator(".contact-form-card").count() == 2
+            assert "csrf_token=" not in page.url
             page.fill('input[name="ico"]', "11223344")
             page.get_by_role("button", name="Uložit kontakt").click()
             page.wait_for_url(lambda url: "/contacts/" in url and not url.endswith("/new"))
             page.get_by_text("Playwright Client s.r.o.").wait_for()
             screenshot("02-contacts")
+
+            contact_detail_url = page.url
+            page.goto(f"{contact_detail_url}/edit")
+            page.get_by_role("heading", name="Upravit kontakt", exact=True).wait_for()
+            assert page.locator(".contact-edit-page").count() == 1
+            assert page.locator(".contact-form-card").count() == 3
+            assert page.locator('button[name="lookup"][value="ares"]').get_attribute("formmethod") is None
+            screenshot("02b-contact-edit")
 
             page.goto(f"{base_url}/invoices/new")
             page.select_option('select[name="contact_id"]', label="Playwright Client s.r.o.")
