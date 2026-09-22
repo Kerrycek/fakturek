@@ -20,6 +20,24 @@ from fakturek.public_links import build_public_invoice_urls
 from fakturek.settings import get_settings
 
 
+EXPECTED_IMPORT_SOURCES = frozenset(
+    {
+        "fakturek_contacts_csv_v1",
+        "fakturek_catalog_csv_v1",
+        "fakturek_native_v1",
+        "fakturek_native_v2",
+        "fakturek_native_v3",
+        "fakturoid",
+        "pohoda_xml",
+        "money_s3_xml",
+        "contacts_csv",
+        "isdoc",
+        "invoice_xml",
+        "pdf_archive",
+    }
+)
+
+
 def _reset_settings_and_db() -> None:
     get_settings.cache_clear()
     db_module._engine = None
@@ -506,6 +524,133 @@ def test_import_history_uses_human_labels_with_safe_fallback(monkeypatch, tmp_pa
     _reset_settings_and_db()
 
 
+@pytest.mark.parametrize(
+    ("stored_source", "display_source"),
+    [
+        ("legacy_custom", "legacy_custom"),
+        ("  PoHoDa_XmL  ", "POHODA XML"),
+    ],
+)
+def test_unsupported_import_run_is_read_only_and_fail_closed(
+    monkeypatch,
+    tmp_path,
+    stored_source,
+    display_source,
+):
+    client, SessionLocal = _setup_sqlite_app(monkeypatch, tmp_path)
+
+    import fakturek.fakturoid_import as importer
+    from fakturek.models import Contact, ImportMap, ImportRun, Invoice
+
+    importer_calls = {"preview": 0, "process": 0}
+
+    def unexpected_preview(*args, **kwargs):
+        importer_calls["preview"] += 1
+        raise AssertionError("unsupported source reached preview importer")
+
+    def unexpected_process(*args, **kwargs):
+        importer_calls["process"] += 1
+        raise AssertionError("unsupported source reached process importer")
+
+    monkeypatch.setattr(importer, "preview_import_run", unexpected_preview)
+    monkeypatch.setattr(importer, "process_import_run", unexpected_process)
+
+    original_summary = '{"marker":"unchanged"}'
+    with SessionLocal() as db:
+        run = ImportRun(
+            subject_id=1,
+            source=stored_source,
+            status="uploaded",
+            file_name="legacy.dat",
+            summary_json=original_summary,
+        )
+        db.add(run)
+        db.commit()
+        run_id = int(run.id)
+        before_counts = (
+            db.query(Contact).count(),
+            db.query(Invoice).count(),
+            db.query(ImportMap).count(),
+        )
+
+    blocked_message = (
+        "Zdroj tohoto importu není podporovaný. Běh zůstává dostupný jen pro audit; "
+        "nelze ho upravit ani spustit."
+    )
+    detail = client.get(f"/imports/{run_id}")
+    assert detail.status_code == 200
+    assert display_source in detail.text
+    assert blocked_message in detail.text
+    assert f'action="/imports/{run_id}/process"' not in detail.text
+    assert f'action="/imports/{run_id}/config"' not in detail.text
+    assert importer_calls == {"preview": 0, "process": 0}
+
+    config_response = client.post(
+        f"/imports/{run_id}/config",
+        data={"contact_conflict_mode": "create_new"},
+        follow_redirects=False,
+    )
+    assert config_response.status_code == 409
+    assert config_response.json() == {"detail": blocked_message}
+
+    process_response = client.post(
+        f"/imports/{run_id}/process",
+        follow_redirects=False,
+    )
+    assert process_response.status_code == 409
+    assert process_response.json() == {"detail": blocked_message}
+    assert importer_calls == {"preview": 0, "process": 0}
+
+    with SessionLocal() as db:
+        unchanged = db.get(ImportRun, run_id)
+        assert unchanged is not None
+        assert unchanged.source == stored_source
+        assert unchanged.status == "uploaded"
+        assert unchanged.summary_json == original_summary
+        assert (
+            db.query(Contact).count(),
+            db.query(Invoice).count(),
+            db.query(ImportMap).count(),
+        ) == before_counts
+
+    switched = client.post(
+        "/settings/language",
+        data={"ui_language": "en", "next": f"/imports/{run_id}"},
+        follow_redirects=False,
+    )
+    assert switched.status_code == 303
+
+    english_message = (
+        "This import source is not supported. The run remains available for audit only; "
+        "it cannot be changed or started."
+    )
+    english_detail = client.get(f"/imports/{run_id}")
+    assert english_detail.status_code == 200
+    assert english_message in english_detail.text
+    english_process = client.post(
+        f"/imports/{run_id}/process",
+        follow_redirects=False,
+    )
+    assert english_process.status_code == 409
+    assert english_process.json() == {"detail": english_message}
+    assert importer_calls == {"preview": 0, "process": 0}
+    with SessionLocal() as db:
+        final_run = db.get(ImportRun, run_id)
+        assert final_run is not None
+        assert (
+            final_run.source,
+            final_run.status,
+            final_run.summary_json,
+        ) == (stored_source, "uploaded", original_summary)
+        assert (
+            db.query(Contact).count(),
+            db.query(Invoice).count(),
+            db.query(ImportMap).count(),
+        ) == before_counts
+
+    _reset_settings_and_db()
+
+
 def test_import_upload_accepts_multipart_with_csrf(monkeypatch, tmp_path):
     client, SessionLocal = _setup_sqlite_app(monkeypatch, tmp_path)
     payload = b"<contacts></contacts>"
@@ -537,6 +682,128 @@ def test_import_upload_accepts_multipart_with_csrf(monkeypatch, tmp_path):
         runs = db.query(ImportRun).all()
         assert len(runs) == 1
         assert runs[0].file_name == "contacts.xml"
+
+    _reset_settings_and_db()
+
+
+def test_import_upload_accepts_every_rendered_source(monkeypatch, tmp_path):
+    monkeypatch.setenv("IMPORT_STORAGE_DIR", str(tmp_path / "imports"))
+    client, SessionLocal = _setup_sqlite_app(monkeypatch, tmp_path)
+
+    page = client.get("/imports")
+    assert page.status_code == 200
+    csrf_match = re.search(r'name="csrf_token" value="([^"]+)"', page.text)
+    assert csrf_match is not None
+    sources = re.findall(r'name="source"\s+value="([^"]+)"', page.text)
+    assert len(sources) == 12
+    assert set(sources) == EXPECTED_IMPORT_SOURCES
+
+    for source in sources:
+        response = client.post(
+            "/imports",
+            data={"source": source, "csrf_token": csrf_match.group(1)},
+            files={"file": (f"{source}.xml", source.encode(), "application/xml")},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303, source
+
+    normalized_response = client.post(
+        "/imports",
+        data={
+            "source": "  PoHoDa_XmL  ",
+            "csrf_token": csrf_match.group(1),
+        },
+        files={"file": ("normalized.xml", b"normalized", "application/xml")},
+        follow_redirects=False,
+    )
+    assert normalized_response.status_code == 303
+
+    for fallback_name, source_data in (
+        ("missing", {}),
+        ("blank", {"source": " \t "}),
+    ):
+        response = client.post(
+            "/imports",
+            data={"csrf_token": csrf_match.group(1), **source_data},
+            files={
+                "file": (
+                    f"{fallback_name}.xml",
+                    fallback_name.encode(),
+                    "application/xml",
+                )
+            },
+            follow_redirects=False,
+        )
+        assert response.status_code == 303, fallback_name
+
+    from fakturek.models import ImportRun
+
+    with SessionLocal() as db:
+        runs = db.query(ImportRun).all()
+        assert {run.source for run in runs} == EXPECTED_IMPORT_SOURCES
+        assert len(runs) == len(EXPECTED_IMPORT_SOURCES) + 3
+        assert sum(run.source == "fakturoid" for run in runs) == 3
+        assert sum(run.source == "pohoda_xml" for run in runs) == 2
+
+    _reset_settings_and_db()
+
+
+def test_import_upload_rejects_unknown_source_before_persisting(monkeypatch, tmp_path):
+    import_root = tmp_path / "imports"
+    monkeypatch.setenv("IMPORT_STORAGE_DIR", str(import_root))
+    client, SessionLocal = _setup_sqlite_app(monkeypatch, tmp_path)
+
+    page = client.get("/imports")
+    assert page.status_code == 200
+    match = re.search(r'name="csrf_token" value="([^"]+)"', page.text)
+    assert match is not None
+
+    response = client.post(
+        "/imports",
+        data={
+            "source": "totally_unknown",
+            "csrf_token": match.group(1),
+        },
+        files={
+            "file": ("unknown.xml", b"<contacts></contacts>", "application/xml"),
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 400
+    assert "Neplatný zdroj importu. Vyber jeden z nabízených typů." in response.text
+
+    from fakturek.models import ImportRun
+
+    with SessionLocal() as db:
+        assert db.query(ImportRun).count() == 0
+    assert not import_root.exists() or not any(import_root.rglob("*"))
+
+    switched = client.post(
+        "/settings/language",
+        data={"ui_language": "en", "next": "/imports"},
+        follow_redirects=False,
+    )
+    assert switched.status_code == 303
+    english_response = client.post(
+        "/imports",
+        data={
+            "source": "totally_unknown",
+            "csrf_token": match.group(1),
+        },
+        files={
+            "file": ("unknown.xml", b"<contacts></contacts>", "application/xml"),
+        },
+        follow_redirects=False,
+    )
+    assert english_response.status_code == 400
+    assert (
+        "Invalid import source. Choose one of the available types."
+        in english_response.text
+    )
+    with SessionLocal() as db:
+        assert db.query(ImportRun).count() == 0
+    assert not import_root.exists() or not any(import_root.rglob("*"))
 
     _reset_settings_and_db()
 
