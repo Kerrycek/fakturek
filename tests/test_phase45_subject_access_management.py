@@ -422,6 +422,7 @@ def test_user_without_export_permission_cannot_download_export_endpoints(monkeyp
         ("get", "/contacts/export.csv"),
         ("get", "/invoices/export.csv"),
         ("get", "/exports/data.zip"),
+        ("get", "/exports/native-backup.zip"),
         ("post", "/exports/invoices"),
         ("get", "/invoices/1/pdf?download=1"),
         ("get", "/invoices/1/isdoc?download=1"),

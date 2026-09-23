@@ -122,6 +122,15 @@ from fakturek.export_formats import (
     build_money_s3_invoice_export_bytes,
     build_pohoda_invoice_export_bytes,
 )
+from fakturek.native_backup import (
+    MAX_ROWS_PER_DATASET as NATIVE_BACKUP_MAX_ROWS,
+    MEDIA_TYPE as NATIVE_BACKUP_MEDIA_TYPE,
+    SOURCE as NATIVE_BACKUP_SOURCE,
+    build_native_backup_bytes,
+    build_native_import_plan,
+    preview_native_backup_import,
+    process_native_backup_import,
+)
 from fakturek.isdoc import build_isdoc_bytes
 from fakturek.public_links import (
     PUBLIC_USERNAME_RE,
@@ -135,6 +144,21 @@ from fakturek.public_links import (
     verify_public_invoice_short_code,
 )
 from fakturek.extensions import register_optional_extensions
+
+
+def _assert_unique_export_import_routes(app: FastAPI) -> None:
+    """Reject overlapping core export/import routes after hosted extensions load."""
+
+    seen: dict[tuple[str, str], object] = {}
+    for route in app.routes:
+        path = str(getattr(route, "path", "") or "")
+        if not (path.startswith("/exports/") or path == "/imports" or path.startswith("/imports/")):
+            continue
+        for method in set(getattr(route, "methods", set()) or set()):
+            key = (str(method).upper(), path)
+            if key in seen:
+                raise RuntimeError(f"Duplicate export/import route: {key[0]} {key[1]}")
+            seen[key] = route
 
 
 def create_app() -> FastAPI:
@@ -420,6 +444,7 @@ def create_app() -> FastAPI:
             "/invoices/export.csv",
             "/exports/data.zip",
             "/exports/invoices",
+            "/exports/native-backup.zip",
         }:
             return True
         return re.fullmatch(r"/invoices/\d+/(pdf|isdoc|cash-receipt/pdf)", current) is not None
@@ -2925,7 +2950,7 @@ def create_app() -> FastAPI:
     # CI sandboxes) may not have the DB stack installed. To keep the app importable
     # and the basic healthcheck usable, we load DB-related dependencies lazily.
     try:  # pragma: no cover (covered in integration/DB tests, not unit tests)
-        from sqlalchemy import case, func, or_, select
+        from sqlalchemy import case, func, or_, select, update
         from sqlalchemy.exc import SQLAlchemyError
         from sqlalchemy.orm import Session, selectinload
 
@@ -13496,6 +13521,47 @@ def create_app() -> FastAPI:
         return out.getvalue()
 
     if _db_enabled:
+        @app.get("/exports/native-backup.zip")
+        def export_native_backup(request: Request, db: Session = Depends(get_db)):
+            """Export only the safe, portable native v1 backup datasets."""
+
+            sid = _current_subject_id()
+            try:
+                contacts = db.scalars(
+                    select(Contact)
+                    .where(Contact.subject_id == int(sid))
+                    .order_by(Contact.name.asc(), Contact.id.asc())
+                    .limit(NATIVE_BACKUP_MAX_ROWS + 1)
+                ).all()
+                catalog_items = db.scalars(
+                    select(InvoiceCatalogItem)
+                    .where(InvoiceCatalogItem.subject_id == int(sid))
+                    .order_by(InvoiceCatalogItem.description.asc(), InvoiceCatalogItem.id.asc())
+                    .limit(NATIVE_BACKUP_MAX_ROWS + 1)
+                ).all()
+                max_upload_bytes = (
+                    max(1, int(getattr(settings, "import_max_upload_mb", 25) or 25)) * 1024 * 1024
+                )
+                payload = build_native_backup_bytes(
+                    contacts=list(contacts),
+                    catalog_items=list(catalog_items),
+                    max_rows=NATIVE_BACKUP_MAX_ROWS,
+                    max_member_bytes=max_upload_bytes,
+                    max_archive_bytes=max_upload_bytes,
+                )
+            except ValueError as exc:
+                return HTMLResponse(
+                    content=f"<h1>Native backup nelze vytvořit</h1><p>{escape(str(exc))}</p>",
+                    status_code=413,
+                )
+            except SQLAlchemyError as exc:  # type: ignore[misc]
+                return _render_db_disabled(request, title="Native backup", db_error=str(exc), status_code=500)
+            return Response(
+                content=payload,
+                media_type=NATIVE_BACKUP_MEDIA_TYPE,
+                headers={"Content-Disposition": _attachment_disposition("fakturek-native-backup-v1.zip")},
+            )
+
         @app.get("/exports/data.zip")
         def export_data_zip(request: Request, db: Session = Depends(get_db)):
             sid = _current_subject_id()
@@ -13731,6 +13797,10 @@ def create_app() -> FastAPI:
 
             return _render_export_error("Vybraný formát exportu zatím neumím zpracovat.")
     else:
+        @app.get("/exports/native-backup.zip")
+        def export_native_backup_disabled(request: Request):
+            return _render_db_disabled(request, title="Native backup")
+
         @app.get("/exports/data.zip")
         def export_data_zip_disabled(request: Request):
             return _render_db_disabled(request, title="Export dat")
@@ -13744,6 +13814,12 @@ def create_app() -> FastAPI:
     # ------------------------------------------------------------------
 
     IMPORT_SOURCE_OPTIONS: list[dict[str, str]] = [
+        {
+            "value": NATIVE_BACKUP_SOURCE,
+            "label": "Fakturek native backup v1",
+            "description": "Bezpečná nativní záloha Faktureku: kontakty a katalogové položky. Neobsahuje faktury ani platby.",
+            "accept": ".zip,application/zip,application/vnd.fakturek.native-backup+zip",
+        },
         {
             "value": "fakturoid",
             "label": "Fakturoid export",
@@ -14133,26 +14209,89 @@ def create_app() -> FastAPI:
             if run is None:
                 raise HTTPException(status_code=404, detail="Import run not found")
 
-            # Mark as running.
+            is_native_backup = (
+                str(getattr(run, "source", "") or "").strip().lower() == NATIVE_BACKUP_SOURCE
+            )
+            native_plan = None
+            if is_native_backup:
+                # Validate every native member before changing even the run state.
+                # Apply this exact immutable plan after the atomic run claim so
+                # preview and processing cannot disagree about earlier rows.
+                try:
+                    max_upload_bytes = (
+                        max(1, int(getattr(settings, "import_max_upload_mb", 25) or 25)) * 1024 * 1024
+                    )
+                    native_plan = build_native_import_plan(
+                        db,
+                        run=run,
+                        subject_id=int(sid),
+                        import_storage_root=import_storage_root,
+                        max_upload_bytes=max_upload_bytes,
+                    )
+                    preview_native_backup_import(
+                        db,
+                        run=run,
+                        subject_id=int(sid),
+                        import_storage_root=import_storage_root,
+                        max_upload_bytes=max_upload_bytes,
+                        plan=native_plan,
+                    )
+                except Exception as exc:
+                    try:
+                        from fakturek.fakturoid_import import summary_to_json
+
+                        run.status = "error"
+                        run.finished_at = utc_now()
+                        run.summary_json = summary_to_json(
+                            {"phase": "native_backup_v1", "error": str(exc)}
+                        )
+                        db.add(run)
+                        db.commit()
+                    except Exception:
+                        db.rollback()
+                    return RedirectResponse(url=f"/imports/{int(run.id)}?error=1", status_code=303)
+
+            # Atomically claim the run.  A second browser/tab must not start a
+            # second importer after the first request has already validated it.
             try:
-                run.status = "running"
-                run.finished_at = None
-                db.add(run)
+                claim = db.execute(
+                    update(ImportRun)
+                    .where(ImportRun.id == int(run.id))
+                    .where(ImportRun.subject_id == int(sid))
+                    .where(ImportRun.status.in_(("uploaded", "error")))
+                    .values(status="running", finished_at=None)
+                    .execution_options(synchronize_session=False)
+                )
                 db.commit()
+                if int(getattr(claim, "rowcount", 0) or 0) != 1:
+                    return RedirectResponse(url=f"/imports/{int(run.id)}?duplicate=1", status_code=303)
+                db.refresh(run)
             except SQLAlchemyError as exc:  # type: ignore[misc]
                 db.rollback()
                 return _render_db_disabled(request, title="Export/Import", db_error=str(exc))
 
             # Execute processing.
             try:
-                from fakturek.fakturoid_import import process_import_run, summary_to_json
+                from fakturek.fakturoid_import import summary_to_json
 
-                summary = process_import_run(
-                    db,
-                    run=run,
-                    subject_id=int(sid),
-                    import_storage_root=import_storage_root,
-                )
+                if is_native_backup:
+                    summary = process_native_backup_import(
+                        db,
+                        run=run,
+                        subject_id=int(sid),
+                        import_storage_root=import_storage_root,
+                        max_upload_bytes=max_upload_bytes,
+                        plan=native_plan,
+                    )
+                else:
+                    from fakturek.fakturoid_import import process_import_run
+
+                    summary = process_import_run(
+                        db,
+                        run=run,
+                        subject_id=int(sid),
+                        import_storage_root=import_storage_root,
+                    )
                 run.status = "finished"
                 run.finished_at = utc_now()
                 run.summary_json = summary_to_json(summary)
@@ -14160,15 +14299,27 @@ def create_app() -> FastAPI:
                 db.commit()
                 return RedirectResponse(url=f"/imports/{int(run.id)}?processed=1", status_code=303)
             except Exception as exc:
-                # Best-effort error persistence.
+                # Do not commit partially flushed business rows while recording
+                # an error. Reload the run only after the failed processing
+                # transaction has been rolled back.
+                db.rollback()
                 try:
                     from fakturek.fakturoid_import import summary_to_json
 
-                    run.status = "error"
-                    run.finished_at = utc_now()
-                    run.summary_json = summary_to_json({"phase": 25, "error": str(exc)})
-                    db.add(run)
-                    db.commit()
+                    failed_run = db.scalar(
+                        select(ImportRun)
+                        .where(ImportRun.id == int(run_id))
+                        .where(ImportRun.subject_id == int(sid))
+                        .limit(1)
+                    )
+                    if failed_run is not None:
+                        failed_run.status = "error"
+                        failed_run.finished_at = utc_now()
+                        failed_run.summary_json = summary_to_json(
+                            {"phase": 25, "error": str(exc)}
+                        )
+                        db.add(failed_run)
+                        db.commit()
                 except Exception:
                     db.rollback()
                 return RedirectResponse(url=f"/imports/{int(run.id)}?error=1", status_code=303)
@@ -14219,14 +14370,24 @@ def create_app() -> FastAPI:
 
             if str(getattr(run, "status", "") or "") in {"uploaded", "error"}:
                 try:
-                    from fakturek.fakturoid_import import preview_import_run
+                    if str(getattr(run, "source", "") or "").strip().lower() == NATIVE_BACKUP_SOURCE:
+                        max_upload_bytes = max(1, int(getattr(settings, "import_max_upload_mb", 25) or 25)) * 1024 * 1024
+                        preview = preview_native_backup_import(
+                            db,
+                            run=run,
+                            subject_id=int(sid),
+                            import_storage_root=import_storage_root,
+                            max_upload_bytes=max_upload_bytes,
+                        )
+                    else:
+                        from fakturek.fakturoid_import import preview_import_run
 
-                    preview = preview_import_run(
-                        db,
-                        run=run,
-                        subject_id=int(sid),
-                        import_storage_root=import_storage_root,
-                    )
+                        preview = preview_import_run(
+                            db,
+                            run=run,
+                            subject_id=int(sid),
+                            import_storage_root=import_storage_root,
+                        )
                 except Exception as exc:
                     preview_error = str(exc)
 
@@ -21678,6 +21839,11 @@ def create_app() -> FastAPI:
         templates=templates,
         project_root=project_root,
     )
+
+    # Hosted deployments may compose an optional patch after core routes.  A
+    # duplicate export/import method would otherwise be silently shadowed by
+    # registration order, which is especially unsafe for backup endpoints.
+    _assert_unique_export_import_routes(app)
 
     return app
 
