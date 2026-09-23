@@ -51,6 +51,10 @@ from fakturek.banking import (
 )
 from fakturek.db import get_db
 from fakturek.emailing import SMTPConfig, build_email_message, looks_like_email, send_via_smtp, split_recipients
+from fakturek.invoice_numbering import (
+    InvoiceSeriesCounterExhausted,
+    next_invoice_series_counter,
+)
 from fakturek.models import (
     ApiIdempotencyKey,
     ApiToken,
@@ -264,7 +268,8 @@ class InvoiceSeriesModel(BaseModel):
     pad_length: int
     last_counter: int
     last_counter_year: int | None
-    next_number_preview: str
+    next_number_preview: str | None
+    counter_exhausted: bool
 
 
 class InvoiceSeriesListResponse(BaseModel):
@@ -2886,12 +2891,41 @@ class ApiV1Builder:
                     continue
                 old_status = str(invoice.status or "") or None
                 number_before = self._none_str(invoice.number)
-                try:
-                    if action == "issue":
-                        self._issue_invoice_draft(db, subject=access.subject, invoice=invoice)
+                if action == "issue":
+                    try:
+                        # Issuing can touch the selected series and invoice before
+                        # allocation detects exhaustion. Keep each attempt isolated
+                        # so a skipped item cannot leak those writes into the bulk
+                        # commit, while later items may still succeed.
+                        with db.begin_nested():
+                            self._issue_invoice_draft(
+                                db, subject=access.subject, invoice=invoice
+                            )
+                    except ApiError as exc:
+                        skipped_count += 1
+                        items.append(
+                            BulkInvoiceActionItem(
+                                invoice_id=int(invoice.id),
+                                number=number_before,
+                                from_status=old_status,
+                                to_status=old_status,
+                                result="skipped",
+                                message=exc.message,
+                            )
+                        )
+                    else:
                         changed_count += 1
-                        items.append(BulkInvoiceActionItem(invoice_id=int(invoice.id), number=self._none_str(invoice.number), from_status=old_status, to_status=str(invoice.status or ""), result="changed"))
-                        continue
+                        items.append(
+                            BulkInvoiceActionItem(
+                                invoice_id=int(invoice.id),
+                                number=self._none_str(invoice.number),
+                                from_status=old_status,
+                                to_status=str(invoice.status or ""),
+                                result="changed",
+                            )
+                        )
+                    continue
+                try:
                     if action == "delete_draft":
                         if str(invoice.status or "").strip().lower() != "draft":
                             skipped_count += 1
@@ -4036,6 +4070,7 @@ class ApiV1Builder:
             last_counter=int(row.last_counter or 0),
             last_counter_year=(int(row.last_counter_year) if row.last_counter_year is not None else None),
             next_number_preview=next_number_preview,
+            counter_exhausted=next_number_preview is None,
         )
 
     def _serialize_bank_account(self, row: SubjectBankAccount) -> BankAccountModel:
@@ -5707,14 +5742,17 @@ class ApiV1Builder:
             db.add(series)
         return int(effective)
 
-    def _invoice_series_next_number_preview(self, db: Session, *, subject_id: int, series: InvoiceSeries, year: int) -> str:
+    def _invoice_series_next_number_preview(self, db: Session, *, subject_id: int, series: InvoiceSeries, year: int) -> str | None:
         observed = self._observed_series_counter_for_year(db, subject_id=int(subject_id), series=series, year=int(year))
         try:
             last_year = int(series.last_counter_year) if getattr(series, "last_counter_year", None) else None
         except Exception:
             last_year = None
         current = int(series.last_counter or 0) if last_year == int(year) else 0
-        next_counter = max(int(current), int(observed)) + 1
+        try:
+            next_counter = next_invoice_series_counter(max(int(current), int(observed)))
+        except InvoiceSeriesCounterExhausted:
+            return None
         return self._format_invoice_number(series, next_counter, year=int(year))
 
     def _format_invoice_number(self, series: InvoiceSeries, counter: int, *, year: int | None = None) -> str:
@@ -5752,7 +5790,14 @@ class ApiV1Builder:
             last_year = None
         base_counter = 0 if last_year != number_year else int(series.last_counter or 0)
         for offset in range(1, 1001):
-            next_counter = int(base_counter) + offset
+            try:
+                next_counter = next_invoice_series_counter(base_counter, offset=offset)
+            except InvoiceSeriesCounterExhausted as exc:
+                raise ApiError(
+                    409,
+                    "invoice_series_counter_exhausted",
+                    "Číselná řada je vyčerpaná; další číslo nelze přidělit.",
+                ) from exc
             candidate = self._format_invoice_number(series, next_counter, year=number_year)
             exists = db.scalar(
                 select(func.count(Invoice.id)).where(

@@ -219,7 +219,7 @@ def _setup_sqlite_api_app(monkeypatch, tmp_path):
 
 
 def test_api_v1_lists_series_and_bank_accounts(monkeypatch, tmp_path):
-    client, _SessionLocal, owner_token, _viewer_token = _setup_sqlite_api_app(monkeypatch, tmp_path)
+    client, SessionLocal, owner_token, _viewer_token = _setup_sqlite_api_app(monkeypatch, tmp_path)
     headers = {"Authorization": f"Bearer {owner_token}"}
 
     series_response = client.get("/api/v1/subjects/1/invoice-series?year=2026", headers=headers)
@@ -236,6 +236,23 @@ def test_api_v1_lists_series_and_bank_accounts(monkeypatch, tmp_path):
     series_detail = client.get("/api/v1/subjects/1/invoice-series/1?year=2026", headers=headers)
     assert series_detail.status_code == 200
     assert series_detail.json()["next_number_preview"] == "2026-0016"
+    assert series_detail.json()["counter_exhausted"] is False
+
+    with SessionLocal() as db:
+        from fakturek.models import InvoiceSeries
+
+        exhausted = db.get(InvoiceSeries, 1)
+        exhausted.last_counter = 2_147_483_647
+        exhausted.last_counter_year = 2026
+        db.commit()
+
+    exhausted_detail = client.get(
+        "/api/v1/subjects/1/invoice-series/1?year=2026", headers=headers
+    )
+    assert exhausted_detail.status_code == 200
+    assert exhausted_detail.json()["next_number_preview"] is None
+    assert exhausted_detail.json()["counter_exhausted"] is True
+    assert "2147483648" not in exhausted_detail.text
 
     bank_accounts = client.get("/api/v1/subjects/1/bank-accounts", headers=headers)
     assert bank_accounts.status_code == 200

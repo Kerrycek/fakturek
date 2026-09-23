@@ -108,17 +108,42 @@
               <article class="stat-card"><span class="stat-label">Účty nové</span><strong class="stat-value">{{ preview.bank_accounts.will_create }}</strong></article>
               <article class="stat-card"><span class="stat-label">Nastaví se jako výchozí</span><strong class="stat-value">{{ preview.bank_accounts.will_default }}</strong></article>
             {% endif %}
+            {% if preview.native_backup_v3 %}
+              <article class="stat-card"><span class="stat-label">Číselné řady</span><strong class="stat-value">{{ preview.invoice_series.parsed }}</strong></article>
+              <article class="stat-card"><span class="stat-label">Řady nové</span><strong class="stat-value">{{ preview.invoice_series.will_create }}</strong></article>
+              <article class="stat-card"><span class="stat-label">Řady znovupoužité</span><strong class="stat-value">{{ preview.invoice_series.will_reuse }}</strong></article>
+            {% endif %}
           </div>
           <div class="table-wrap"><table class="table"><tbody>
             <tr><th>Kontakty checksum</th><td>{{ preview.datasets.contacts.checksum }}</td></tr>
             <tr><th>Katalog checksum</th><td>{{ preview.datasets.catalog_items.checksum }}</td></tr>
             {% if preview.native_backup_v2 %}<tr><th>Účty checksum</th><td>{{ preview.datasets.bank_accounts.checksum }}</td></tr>{% endif %}
+            {% if preview.native_backup_v3 %}<tr><th>Řady checksum</th><td>{{ preview.datasets.invoice_series.checksum }}</td></tr>{% endif %}
             <tr><th>Zdrojový subjekt</th><td>Jen informativní — importuje se do aktuálního subjektu.</td></tr>
           </tbody></table></div>
           {% if preview.native_backup_v2 %}
             <p><strong>Účty, které už existují, se nikdy nepřepisují.</strong> Výchozí účet se nastaví jen tehdy, když cílový subjekt žádný nemá. Nové účty zachovají vzájemné pořadí zálohy a zařadí se za cílové účty. Tokeny, synchronizace a transakce nejsou součástí zálohy.</p>
             <p class="muted"><small>Náhled je aktuální, ale nezávazný: soubor i cílové účty se znovu ověří při spuštění importu.</small></p>
             {% for warning in preview.bank_accounts.warnings %}<p class="muted"><small>{{ warning }}</small></p>{% endfor %}
+          {% endif %}
+          {% if preview.native_backup_v3 %}
+            <p><strong>Číselné řady se při shodném názvu jen znovu použijí a nikdy se nepřepisují.</strong> Nové řady se vytvoří přesně s bezpečným stavem ze zálohy. Faktury, platby, opakované faktury, profil, nastavení, tajné klíče, synchronizace ani transakce nejsou součástí zálohy.</p>
+            <p class="muted"><small>Náhled je aktuální, ale nezávazný: soubor, cílové účty i číselné řady se znovu ověří při spuštění importu.</small></p>
+            {% if preview.invoice_series.rows %}
+              <div class="table-wrap"><table class="table">
+                <thead><tr><th>Řada</th><th>Akce</th><th>Další číslo</th></tr></thead>
+                <tbody>
+                  {% for row in preview.invoice_series.rows %}
+                    <tr>
+                      <td>{{ row.name }}</td>
+                      <td>{% if row.action == 'create' %}nová{% else %}znovupoužije se{% endif %}</td>
+                      <td>{% if row.next_number %}{{ row.next_number }}{% else %}Vyčerpáno — další číslo nelze přidělit{% endif %}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table></div>
+            {% endif %}
+            {% for item in preview.invoice_series.warnings %}<p class="notice warning"><strong>Upozornění:</strong> {{ item }}</p>{% endfor %}
           {% endif %}
           <form method="post" action="/imports/{{ run.id }}/config" class="form stack-sm">
             {{ csrf_input(request)|safe }}
