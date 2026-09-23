@@ -148,6 +148,55 @@ def test_catalog_csv_export_import_preview_variants_and_idempotence(monkeypatch,
     _reset()
 
 
+def test_invalid_catalog_preview_hides_process_action_and_remains_fail_closed(
+    monkeypatch, tmp_path
+):
+    client, SessionLocal, _import_root = _setup(monkeypatch, tmp_path)
+    valid = client.post(
+        "/imports",
+        data={"source": "fakturek_catalog_csv_v1"},
+        files={
+            "file": (
+                "catalog.csv",
+                _csv(["1;Valid row;1;hour;1;21;CZK"]),
+                "text/csv",
+            )
+        },
+        follow_redirects=False,
+    )
+    assert valid.status_code == 303
+    assert "Spustit import" in client.get(valid.headers["location"]).text
+
+    payload = b"wrong;header\n1;unsafe\n"
+    uploaded = client.post(
+        "/imports",
+        data={"source": "fakturek_catalog_csv_v1"},
+        files={"file": ("catalog.csv", payload, "text/csv")},
+        follow_redirects=False,
+    )
+    assert uploaded.status_code == 303
+    detail_url = uploaded.headers["location"]
+    run_id = int(detail_url.split("/")[2].split("?")[0])
+    detail = client.get(detail_url)
+    assert "Preview selhalo" in detail.text
+    assert "Import nelze spustit" in detail.text
+    assert "Spustit import" not in detail.text
+    assert f'action="/imports/{run_id}/process"' not in detail.text
+
+    processed = client.post(f"/imports/{run_id}/process", follow_redirects=False)
+    assert processed.status_code == 303
+    assert processed.headers["location"] == f"/imports/{run_id}?error=1"
+    with SessionLocal() as db:
+        from fakturek.models import ImportRun, InvoiceCatalogItem
+
+        assert db.get(ImportRun, run_id).status == "error"
+        assert db.query(InvoiceCatalogItem).filter_by(subject_id=1).count() == 1
+    retry_detail = client.get(f"/imports/{run_id}")
+    assert "Import nelze spustit" in retry_detail.text
+    assert "Spustit import" not in retry_detail.text
+    _reset()
+
+
 def test_catalog_csv_processing_uses_bounded_bulk_sql(monkeypatch, tmp_path):
     _client, SessionLocal, import_root = _setup(monkeypatch, tmp_path)
     from sqlalchemy import event

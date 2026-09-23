@@ -707,6 +707,13 @@ UI_TRANSLATIONS_EN.update(
         "Tokeny, synchronizace a transakce nejsou součástí zálohy.": "Tokens, synchronization state and transactions are not part of the backup.",
         "Výchozí účet se nastaví jen tehdy, když cílový subjekt žádný nemá. Nové účty zachovají vzájemné pořadí zálohy a zařadí se za cílové účty. Tokeny, synchronizace a transakce nejsou součástí zálohy.": "A default account is set only when the destination subject has none. New accounts preserve their relative backup order and are placed after destination accounts. Tokens, synchronization state and transactions are not part of the backup.",
         "Náhled je aktuální, ale nezávazný: soubor i cílové účty se znovu ověří při spuštění importu.": "The preview is current but non-binding: the file and destination accounts are validated again when import starts.",
+        (
+            "Import nelze spustit, dokud soubor neprojde kontrolou náhledu. "
+            "Nahraj opravený soubor znovu."
+        ): (
+            "The import cannot start until the file passes preview validation. "
+            "Upload a corrected file and try again."
+        ),
         "ZIP byl plně ověřen. Importuje pouze kontakty, katalog a bezpečná pole bankovních účtů; nikdy tokeny, synchronizaci ani transakce.": "The ZIP was fully validated. It imports only contacts, catalog items and safe bank-account fields—never tokens, synchronization state or transactions.",
         "Importovaný výchozí účet se nenastaví, protože cílový subjekt už výchozí účet má nebo ho zachovává.": "The imported default account will not be set because the destination already has or preserves a default account.",
         "Importovaný výchozí účet se nenastaví, protože cílový subjekt už výchozí účet má.": "The imported default account will not be set because the destination now has a default account.",

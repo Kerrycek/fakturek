@@ -246,6 +246,7 @@ def test_v2_export_route_and_upload_require_csrf(monkeypatch, tmp_path):
     assert accepted.status_code == 303
     detail = client.get(accepted.headers["location"])
     assert detail.status_code == 200
+    assert "Spustit import" in detail.text
     from fakturek.ui_i18n import translate_html_document
 
     english_detail = translate_html_document(detail.text, "en")
@@ -359,6 +360,65 @@ def _archive_with_account(
         if extra_member:
             archive.writestr(extra_member, b"x")
     return out.getvalue()
+
+
+def test_v2_invalid_preview_hides_process_action_and_remains_fail_closed(
+    monkeypatch, tmp_path
+):
+    SessionLocal, _root = _setup(monkeypatch, tmp_path)
+    row = {
+        "label": "Unsafe",
+        "account_number": "123/0800",
+        "iban": "",
+        "bic": "",
+        "country": "CZ",
+        "currency": "CZK",
+        "is_default": False,
+        "sort_order": 0,
+        "fio_api_token": "must-not-import",
+    }
+    payload = _archive_with_account(row)
+    from fakturek.main import create_app
+
+    client = TestClient(create_app())
+    uploaded = client.post(
+        "/imports",
+        data={"source": "fakturek_native_v2"},
+        files={"file": ("unsafe.zip", payload, "application/zip")},
+        follow_redirects=False,
+    )
+    assert uploaded.status_code == 303
+    detail_url = uploaded.headers["location"]
+    run_id = int(detail_url.split("/")[2].split("?")[0])
+    detail = client.get(detail_url)
+    assert "Preview selhalo" in detail.text
+    assert "Import nelze spustit" in detail.text
+    assert "Spustit import" not in detail.text
+    assert f'action="/imports/{run_id}/process"' not in detail.text
+
+    from fakturek.ui_i18n import translate_html_document
+
+    english_detail = translate_html_document(detail.text, "en")
+    assert "The import cannot start until the file passes preview validation." in english_detail
+
+    processed = client.post(f"/imports/{run_id}/process", follow_redirects=False)
+    assert processed.status_code == 303
+    assert processed.headers["location"] == f"/imports/{run_id}?error=1"
+    with SessionLocal() as db:
+        from fakturek.models import ImportRun, SubjectBankAccount
+
+        assert db.get(ImportRun, run_id).status == "error"
+        assert db.query(SubjectBankAccount).filter_by(subject_id=1).count() == 1
+        assert (
+            db.query(SubjectBankAccount)
+            .filter_by(subject_id=1, label="Unsafe")
+            .count()
+            == 0
+        )
+    retry_detail = client.get(f"/imports/{run_id}")
+    assert "Import nelze spustit" in retry_detail.text
+    assert "Spustit import" not in retry_detail.text
+    _reset()
 
 
 @pytest.mark.parametrize(

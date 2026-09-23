@@ -50,6 +50,10 @@
           čísel faktur. Opakované spuštění je idempotentní.
         </small></p>
       {% endif %}
+
+      {% if process_blocked_reason %}
+        <p class="notice error">{{ process_blocked_reason }}</p>
+      {% endif %}
     </div>
 
     {% if preview_error %}

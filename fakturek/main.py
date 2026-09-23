@@ -15047,6 +15047,7 @@ def create_app() -> FastAPI:
             preview = None
             preview_error = None
             config = _import_run_config(run)
+            source_value = str(getattr(run, "source", "") or "").strip().lower()
             try:
                 if getattr(run, "summary_json", None):
                     summary = json.loads(str(run.summary_json))
@@ -15055,7 +15056,6 @@ def create_app() -> FastAPI:
 
             if str(getattr(run, "status", "") or "") in {"uploaded", "error"}:
                 try:
-                    source_value = str(getattr(run, "source", "") or "").strip().lower()
                     if source_value == NATIVE_BACKUP_SOURCE:
                         max_upload_bytes = max(1, int(getattr(settings, "import_max_upload_mb", 25) or 25)) * 1024 * 1024
                         preview = preview_native_backup_import(
@@ -15095,10 +15095,19 @@ def create_app() -> FastAPI:
                 except Exception as exc:
                     preview_error = (
                         "Catalog CSV is invalid or unavailable."
-                        if str(getattr(run, "source", "") or "").strip().lower()
-                        == CATALOG_CSV_SOURCE
+                        if source_value == CATALOG_CSV_SOURCE
                         else str(exc)
                     )
+
+            strict_preview_failed = preview_error is not None and source_value in {
+                NATIVE_BACKUP_SOURCE,
+                NATIVE_BACKUP_V2_SOURCE,
+                CATALOG_CSV_SOURCE,
+            }
+            can_process = (
+                str(getattr(run, "status", "") or "") in {"uploaded", "error"}
+                and not strict_preview_failed
+            )
 
             return templates.TemplateResponse(
                 request,
@@ -15113,7 +15122,13 @@ def create_app() -> FastAPI:
                     "preview": preview,
                     "preview_error": preview_error,
                     "config": config,
-                    "can_process": str(getattr(run, "status", "")) in {"uploaded", "error"},
+                    "can_process": can_process,
+                    "process_blocked_reason": (
+                        "Import nelze spustit, dokud soubor neprojde kontrolou náhledu. "
+                        "Nahraj opravený soubor znovu."
+                        if strict_preview_failed
+                        else None
+                    ),
                     "contact_mapping_fields": IMPORT_CONTACT_MAPPING_FIELDS,
                     "contact_conflict_options": IMPORT_CONTACT_CONFLICT_OPTIONS,
                     "invoice_conflict_options": IMPORT_INVOICE_CONFLICT_OPTIONS,
