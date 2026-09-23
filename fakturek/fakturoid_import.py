@@ -439,6 +439,14 @@ class ParsedLine:
 
 
 @dataclass
+class ParsedPayment:
+    external_id: str
+    paid_on: date
+    amount_cents: int
+    note: str = ""
+
+
+@dataclass
 class ParsedInvoice:
     external_id: str
     number: str
@@ -468,6 +476,7 @@ class ParsedInvoice:
     bank_account_country: str = ""
     source_invoice_number: str = ""
     source_invoice_external_id: str = ""
+    payments: list[ParsedPayment] = field(default_factory=list)
 
 
 @dataclass
@@ -588,13 +597,45 @@ def _parsed_contact_from_field_map(fields: dict[str, str]) -> ParsedContact:
 
 FAKTUREK_INVOICE_XML_FORMAT = "fakturek_invoice_export"
 FAKTUREK_INVOICE_XML_VERSION = "1"
+FAKTUREK_INVOICE_XML_PAYMENTS_VERSION = "2"
 FAKTUREK_INVOICE_XML_MAX_INVOICES = 10_000
 FAKTUREK_INVOICE_XML_MAX_ITEMS = 100_000
+FAKTUREK_INVOICE_XML_MAX_PAYMENTS = 100_000
+FAKTUREK_INVOICE_XML_MAX_PAYMENT_NOTE_LENGTH = 255
+FAKTUREK_INVOICE_XML_MAX_BYTES = 50 * 1024 * 1024
+
+_NATIVE_FAKTUREK_XML_FORMATS = frozenset(
+    {"fakturek_xml_v1", "fakturek_xml_v2", "fakturek_xml_legacy"}
+)
 
 _FAKTUREK_DOCUMENT_TYPES = {"invoice", "quote", "credit_note", "proforma"}
 _FAKTUREK_STATUSES = {"draft", "issued", "sent", "paid", "cancelled"}
 _FAKTUREK_PAYMENT_METHODS = {"bank_transfer", "cash", "card", "cod"}
 _FAKTUREK_MAX_CENTS = 2_147_483_647
+
+
+def fakturek_xml_payment_note_is_roundtrip_safe(value: str) -> bool:
+    """Accept the strict XML 1.0 text subset that round-trips unchanged.
+
+    ElementTree writes carriage returns literally, while XML parsing normalizes
+    them to line feeds.  We therefore reject CR as well as control characters,
+    surrogate code points, and Unicode noncharacters instead of exporting or
+    importing a payment note that cannot be reproduced exactly.
+    """
+
+    for character in str(value):
+        codepoint = ord(character)
+        if codepoint in {0x09, 0x0A}:
+            continue
+        if codepoint < 0x20 or 0x7F <= codepoint <= 0x9F:
+            return False
+        if 0xD800 <= codepoint <= 0xDFFF:
+            return False
+        if 0xFDD0 <= codepoint <= 0xFDEF:
+            return False
+        if (codepoint & 0xFFFF) in {0xFFFE, 0xFFFF}:
+            return False
+    return True
 
 
 def _classify_fakturek_invoice_root(root: ET.Element) -> str | None:
@@ -617,9 +658,11 @@ def _classify_fakturek_invoice_root(root: ET.Element) -> str | None:
         return "fakturek_xml_legacy"
     if format_name != FAKTUREK_INVOICE_XML_FORMAT:
         raise ValueError("Nepodporovaný formát Fakturek XML exportu")
-    if version != FAKTUREK_INVOICE_XML_VERSION:
-        raise ValueError(f"Nepodporovaná verze Fakturek XML exportu: {version or 'neuvedena'}")
-    return "fakturek_xml_v1"
+    if version == FAKTUREK_INVOICE_XML_VERSION:
+        return "fakturek_xml_v1"
+    if version == FAKTUREK_INVOICE_XML_PAYMENTS_VERSION:
+        return "fakturek_xml_v2"
+    raise ValueError(f"Nepodporovaná verze Fakturek XML exportu: {version or 'neuvedena'}")
 
 
 def _fakturek_xml_text(
@@ -687,7 +730,7 @@ def _fakturek_xml_count(container: ET.Element, actual: int, *, field_name: str, 
 
 
 def _parse_fakturek_invoices_xml(xml_bytes: bytes, *, expected_format: str) -> list[ParsedInvoice]:
-    xml_bytes = ensure_safe_xml_bytes(xml_bytes)
+    xml_bytes = ensure_safe_xml_bytes(xml_bytes, max_bytes=FAKTUREK_INVOICE_XML_MAX_BYTES)
     try:
         root = _safe_xml_fromstring(xml_bytes)
     except ET.ParseError as exc:
@@ -697,8 +740,10 @@ def _parse_fakturek_invoices_xml(xml_bytes: bytes, *, expected_format: str) -> l
     if detected != expected_format:
         raise ValueError("Fakturek XML neodpovídá zvolené verzi parseru")
     strict_v1 = detected == "fakturek_xml_v1"
+    strict_v2 = detected == "fakturek_xml_v2"
+    strict_native = strict_v1 or strict_v2
 
-    origin_attr = "origin_subject_id" if strict_v1 else "subject_id"
+    origin_attr = "origin_subject_id" if strict_native else "subject_id"
     origin_id = _fakturek_xml_int(
         str(root.attrib.get(origin_attr) or ""),
         field_name=origin_attr,
@@ -717,14 +762,16 @@ def _parse_fakturek_invoices_xml(xml_bytes: bytes, *, expected_format: str) -> l
         invoice_container,
         len(invoice_elements),
         field_name="invoices",
-        required=strict_v1,
+        required=strict_native,
     )
 
     parsed_invoices: list[ParsedInvoice] = []
     seen_invoice_ids: set[int] = set()
     seen_invoice_numbers: set[str] = set()
     total_item_count = 0
-    source_prefix = "v1" if strict_v1 else "legacy"
+    source_prefix = "v2" if strict_v2 else ("v1" if strict_v1 else "legacy")
+    seen_payment_ids: set[int] = set()
+    total_payment_count = 0
 
     for invoice_el in invoice_elements:
         raw_invoice_id = _fakturek_xml_int(
@@ -756,7 +803,7 @@ def _parse_fakturek_invoices_xml(xml_bytes: bytes, *, expected_format: str) -> l
         taxable_supply_date = _fakturek_xml_date(
             fields.get("taxable_supply_date", ""),
             field_name="taxable_supply_date",
-            required=strict_v1,
+            required=strict_native,
         ) or issue_date
         paid_on = _fakturek_xml_date(fields.get("paid_on", ""), field_name="paid_on")
         sent_at = _fakturek_xml_datetime(fields.get("sent_at", ""), field_name="sent_at")
@@ -799,7 +846,7 @@ def _parse_fakturek_invoices_xml(xml_bytes: bytes, *, expected_format: str) -> l
                 minimum=1,
                 maximum=9_223_372_036_854_775_807,
             )
-        if strict_v1 and document_type == "credit_note" and raw_source_invoice_id is None:
+        if strict_native and document_type == "credit_note" and raw_source_invoice_id is None:
             raise ValueError("Fakturek XML: dobropis musí obsahovat source_invoice_id")
 
         contact_elements = [child for child in list(invoice_el) if _norm(child.tag) == "contact"]
@@ -815,13 +862,13 @@ def _parse_fakturek_invoices_xml(xml_bytes: bytes, *, expected_format: str) -> l
                 minimum=1,
                 maximum=9_223_372_036_854_775_807,
             )
-        elif strict_v1:
+        elif strict_native:
             raise ValueError("Fakturek XML: chybí contact/id")
         contact_name = _fakturek_xml_text(
             contact_fields,
             "name",
             max_length=255,
-            required=strict_v1,
+            required=strict_native,
         ) or "Bez názvu"
         country = (_fakturek_xml_text(contact_fields, "country", max_length=2) or "CZ").upper()
         if not re.fullmatch(r"[A-Z]{2}", country):
@@ -879,7 +926,7 @@ def _parse_fakturek_invoices_xml(xml_bytes: bytes, *, expected_format: str) -> l
             item_containers[0],
             len(item_elements),
             field_name="items",
-            required=strict_v1,
+            required=strict_native,
         )
 
         lines: list[ParsedLine] = []
@@ -965,6 +1012,80 @@ def _parse_fakturek_invoices_xml(xml_bytes: bytes, *, expected_format: str) -> l
         if document_type != "credit_note" and total_cents < 0:
             raise ValueError("Fakturek XML: záporný total_cents je povolen jen pro dobropis")
 
+        parsed_payments: list[ParsedPayment] = []
+        payment_containers = [child for child in list(invoice_el) if _norm(child.tag) == "payments"]
+        if strict_v2:
+            if len(payment_containers) != 1:
+                raise ValueError(
+                    "Fakturek XML v2: faktura musí obsahovat právě jeden element payments"
+                )
+            payment_container = payment_containers[0]
+            if set(payment_container.attrib) != {"count"}:
+                raise ValueError("Fakturek XML v2: payments smí obsahovat jen atribut count")
+            if any(_norm(child.tag) != "payment" for child in list(payment_container)):
+                raise ValueError("Fakturek XML v2: payments obsahuje nepodporovaný element")
+            payment_elements = list(payment_container)
+            total_payment_count += len(payment_elements)
+            if total_payment_count > FAKTUREK_INVOICE_XML_MAX_PAYMENTS:
+                raise ValueError("Fakturek XML obsahuje příliš mnoho plateb")
+            _fakturek_xml_count(
+                payment_container,
+                len(payment_elements),
+                field_name="payments",
+                required=True,
+            )
+            for payment_el in payment_elements:
+                if set(payment_el.attrib) != {"id"}:
+                    raise ValueError("Fakturek XML v2: payment smí obsahovat jen atribut id")
+                raw_payment_id = _fakturek_xml_int(
+                    str(payment_el.attrib.get("id") or ""),
+                    field_name="payment@id",
+                    minimum=1,
+                    maximum=9_223_372_036_854_775_807,
+                )
+                if raw_payment_id in seen_payment_ids:
+                    raise ValueError("Fakturek XML obsahuje duplicitní payment@id")
+                seen_payment_ids.add(raw_payment_id)
+                payment_children = list(payment_el)
+                payment_child_names = [_norm(child.tag) for child in payment_children]
+                if set(payment_child_names) - {"paid_on", "amount_cents", "note"}:
+                    raise ValueError("Fakturek XML v2: payment obsahuje nepodporovaný element")
+                for field_name in ("paid_on", "amount_cents", "note"):
+                    if payment_child_names.count(field_name) != 1:
+                        raise ValueError(
+                            f"Fakturek XML v2: payment musí obsahovat právě jeden {field_name}"
+                        )
+                if any(list(child) for child in payment_children):
+                    raise ValueError("Fakturek XML v2: pole platby nesmí obsahovat vnořené elementy")
+                payment_fields = {
+                    _norm(child.tag): str(child.text or "") for child in payment_children
+                }
+                raw_payment_paid_on = payment_fields["paid_on"].strip()
+                if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw_payment_paid_on):
+                    raise ValueError("Fakturek XML: payment/paid_on nemá platné ISO datum")
+                payment_paid_on = _fakturek_xml_date(
+                    raw_payment_paid_on,
+                    field_name="payment/paid_on",
+                    required=True,
+                )
+                assert payment_paid_on is not None
+                payment_amount_cents = _fakturek_xml_int(
+                    payment_fields["amount_cents"],
+                    field_name="payment/amount_cents",
+                )
+                payment_note = payment_fields["note"]
+                if len(payment_note) > FAKTUREK_INVOICE_XML_MAX_PAYMENT_NOTE_LENGTH:
+                    raise ValueError("Fakturek XML: payment/note je příliš dlouhé")
+                if not fakturek_xml_payment_note_is_roundtrip_safe(payment_note):
+                    raise ValueError("Fakturek XML: payment/note obsahuje nepovolené znaky")
+                parsed_payments.append(
+                    ParsedPayment(
+                        external_id=f"v2:{origin_id}:payment:{raw_payment_id}",
+                        paid_on=payment_paid_on,
+                        amount_cents=payment_amount_cents,
+                        note=payment_note,
+                    )
+                )
         external_id = f"{source_prefix}:{origin_id}:invoice:{raw_invoice_id}"
         buyer_external_id = (
             f"{source_prefix}:{origin_id}:contact:{raw_contact_id}" if raw_contact_id is not None else None
@@ -1003,6 +1124,7 @@ def _parse_fakturek_invoices_xml(xml_bytes: bytes, *, expected_format: str) -> l
                     if raw_source_invoice_id is not None
                     else ""
                 ),
+                payments=parsed_payments,
             )
         )
 
@@ -1011,7 +1133,7 @@ def _parse_fakturek_invoices_xml(xml_bytes: bytes, *, expected_format: str) -> l
     for invoice in parsed_invoices:
         if invoice.document_type != "credit_note":
             continue
-        if strict_v1:
+        if strict_native:
             source_in_document = invoices_by_external_id.get(invoice.source_invoice_external_id)
             if source_in_document is None:
                 raise ValueError("Fakturek XML: source_invoice_id chybí v exportu")
@@ -1039,6 +1161,12 @@ def parse_fakturek_invoices_xml_v1(xml_bytes: bytes) -> list[ParsedInvoice]:
     """Parse the explicit, strict Fakturek invoice export schema v1."""
 
     return _parse_fakturek_invoices_xml(xml_bytes, expected_format="fakturek_xml_v1")
+
+
+def parse_fakturek_invoices_xml_v2(xml_bytes: bytes) -> list[ParsedInvoice]:
+    """Parse Fakturek invoice XML v2, including ordered payment rows."""
+
+    return _parse_fakturek_invoices_xml(xml_bytes, expected_format="fakturek_xml_v2")
 
 
 def parse_fakturek_invoices_xml_legacy(xml_bytes: bytes) -> list[ParsedInvoice]:
@@ -2249,6 +2377,8 @@ def _select_invoice_parser(source: str, xml_bytes: bytes):
     detected = detect_xml_import_format(xml_bytes)
     if detected == "fakturek_xml_v1":
         return parse_fakturek_invoices_xml_v1, detected
+    if detected == "fakturek_xml_v2":
+        return parse_fakturek_invoices_xml_v2, detected
     if detected == "fakturek_xml_legacy":
         return parse_fakturek_invoices_xml_legacy, detected
     if normalized == "pohoda_xml":
@@ -2429,7 +2559,15 @@ def process_import_run(
     from sqlalchemy import select
 
     from fakturek.importing import ensure_import_map, lookup_imported_id
-    from fakturek.models import Contact, Invoice, InvoiceItem, InvoiceParty, Subject, SubjectBankAccount
+    from fakturek.models import (
+        Contact,
+        Invoice,
+        InvoiceItem,
+        InvoiceParty,
+        Payment,
+        Subject,
+        SubjectBankAccount,
+    )
     from fakturek.public_links import ensure_invoice_public_link
 
     if int(getattr(run, "subject_id", 0) or 0) != int(subject_id):
@@ -2536,8 +2674,36 @@ def process_import_run(
             "warnings": [],
             "errors": [],
         },
+        "payments": {
+            "parsed": 0,
+            "created": 0,
+            "reused": 0,
+            "skipped": 0,
+            "errors": [],
+        },
         "series": None,
     }
+
+    def _mapped_native_payment(*, map_source: str, external_id: str):
+        mapped_id = lookup_imported_id(
+            db,
+            subject_id=int(subject_id),
+            source=str(map_source),
+            entity_type="payment",
+            external_id=str(external_id),
+        )
+        if mapped_id is None:
+            return None
+        payment = db.scalar(
+            select(Payment)
+            .join(Invoice, Invoice.id == Payment.invoice_id)
+            .where(Payment.id == int(mapped_id))
+            .where(Invoice.subject_id == int(subject_id))
+            .limit(1)
+        )
+        if payment is None:
+            raise ValueError("Mapování platby Fakturek XML nepatří k aktuálnímu subjektu")
+        return payment
 
     def _ensure_invoice_link(invoice_obj) -> None:
         had_link = bool(
@@ -2760,6 +2926,9 @@ def process_import_run(
             invoice_parser, resolved_source = _select_invoice_parser(source, assets.xml_bytes)
             parsed = invoice_parser(assets.xml_bytes)
             summary["invoices"]["parsed"] = len(parsed)
+            summary["payments"]["parsed"] = sum(
+                len(list(getattr(invoice, "payments", []) or [])) for invoice in parsed
+            )
             invoice_input_kind = resolved_source
             summary["detected"]["xml_format"] = resolved_source
         except Exception as exc:
@@ -2791,11 +2960,11 @@ def process_import_run(
     if parsed:
         invoice_map_source = (
             str(invoice_input_kind)
-            if invoice_input_kind in {"fakturek_xml_v1", "fakturek_xml_legacy"}
+            if invoice_input_kind in _NATIVE_FAKTUREK_XML_FORMATS
             else str(source)
         )
         native_invoice_map: dict[str, object] = {}
-        if invoice_map_source in {"fakturek_xml_v1", "fakturek_xml_legacy"}:
+        if invoice_map_source in _NATIVE_FAKTUREK_XML_FORMATS:
             # Import source invoices before credit notes so links can be restored
             # even when the export was ordered newest-first.
             parsed = sorted(
@@ -2825,9 +2994,35 @@ def process_import_run(
                         )
                         if existing_invoice is not None:
                             _ensure_invoice_link(existing_invoice)
-                            if invoice_map_source in {"fakturek_xml_v1", "fakturek_xml_legacy"}:
+                            if invoice_map_source in _NATIVE_FAKTUREK_XML_FORMATS:
                                 native_invoice_map[ext_id] = existing_invoice
+                        elif invoice_map_source == "fakturek_xml_v2":
+                            raise ValueError(
+                                "Mapování faktury Fakturek XML nepatří k aktuálnímu subjektu"
+                            )
+
+                        if invoice_map_source == "fakturek_xml_v2":
+                            for parsed_payment in list(getattr(inv, "payments", []) or []):
+                                mapped_payment = _mapped_native_payment(
+                                    map_source=invoice_map_source,
+                                    external_id=str(parsed_payment.external_id),
+                                )
+                                if mapped_payment is None:
+                                    # A replay never mutates a previously imported
+                                    # invoice. Missing historical payment mappings
+                                    # remain visible in the summary instead.
+                                    summary["payments"]["skipped"] += 1
+                                    continue
+                                if existing_invoice is None or int(
+                                    mapped_payment.invoice_id
+                                ) != int(existing_invoice.id):
+                                    raise ValueError(
+                                        "Mapování platby Fakturek XML odkazuje na jinou fakturu"
+                                    )
+                                summary["payments"]["reused"] += 1
                     except Exception as exc:
+                        if invoice_map_source == "fakturek_xml_v2":
+                            raise
                         summary["invoices"]["warnings"].append(
                             {
                                 "invoice": str(inv.number or ""),
@@ -2862,6 +3057,10 @@ def process_import_run(
                         )
                     else:
                         summary["invoices"]["skipped_number_conflict"] += 1
+                        if invoice_map_source == "fakturek_xml_v2":
+                            summary["payments"]["skipped"] += len(
+                                list(getattr(inv, "payments", []) or [])
+                            )
                         try:
                             _ensure_invoice_link(existing_by_number)
                         except Exception as exc:
@@ -2883,7 +3082,7 @@ def process_import_run(
 
                 source_invoice_for_import = None
                 if (
-                    invoice_map_source in {"fakturek_xml_v1", "fakturek_xml_legacy"}
+                    invoice_map_source in _NATIVE_FAKTUREK_XML_FORMATS
                     and str(getattr(inv, "document_type", "") or "") == "credit_note"
                 ):
                     source_external_id = str(
@@ -3149,7 +3348,7 @@ def process_import_run(
 
                 db.add(invoice)
                 db.flush()
-                if invoice_map_source in {"fakturek_xml_v1", "fakturek_xml_legacy"}:
+                if invoice_map_source in _NATIVE_FAKTUREK_XML_FORMATS:
                     native_invoice_map[ext_id] = invoice
 
                 # Items.
@@ -3167,6 +3366,34 @@ def process_import_run(
                         sort_order=int(idx),
                     )
                     db.add(item)
+
+                if invoice_map_source == "fakturek_xml_v2":
+                    for parsed_payment in list(getattr(inv, "payments", []) or []):
+                        if _mapped_native_payment(
+                            map_source=invoice_map_source,
+                            external_id=str(parsed_payment.external_id),
+                        ) is not None:
+                            raise ValueError(
+                                "Platba Fakturek XML už je namapovaná k jiné "
+                                "importované faktuře"
+                            )
+                        payment = Payment(
+                            invoice_id=int(invoice.id),
+                            paid_on=parsed_payment.paid_on,
+                            amount_cents=int(parsed_payment.amount_cents),
+                            note=str(parsed_payment.note or "") or None,
+                        )
+                        db.add(payment)
+                        db.flush()
+                        ensure_import_map(
+                            db,
+                            subject_id=int(subject_id),
+                            source=invoice_map_source,
+                            entity_type="payment",
+                            external_id=str(parsed_payment.external_id),
+                            internal_id=int(payment.id),
+                        )
+                        summary["payments"]["created"] += 1
 
                 # Parties snapshots.
                 buyer_party = InvoiceParty(
@@ -3214,7 +3441,7 @@ def process_import_run(
 
                 summary["invoices"]["imported"] += 1
             except Exception as exc:
-                if invoice_map_source in {"fakturek_xml_v1", "fakturek_xml_legacy"}:
+                if invoice_map_source in _NATIVE_FAKTUREK_XML_FORMATS:
                     # Native exports are one integrity-checked document. Never
                     # commit an earlier invoice/contact if a later row fails.
                     raise
@@ -3251,6 +3478,13 @@ def process_import_run(
         public_backfilled = int(summary["invoices"].get("public_links_backfilled", 0) or 0)
         if public_created or public_backfilled:
             parts.append(f"public links: +{public_created} created, +{public_backfilled} backfilled")
+        if int(summary["payments"].get("parsed", 0) or 0):
+            parts.append(
+                "payments: "
+                f"+{summary['payments']['created']} created, "
+                f"{summary['payments']['reused']} reused, "
+                f"{summary['payments']['skipped']} skipped"
+            )
     if summary.get("series") and isinstance(summary.get("series"), dict) and not summary["series"].get("error"):
         parts.append(
             f"series: +{summary['series'].get('created_series', 0)} created, {summary['series'].get('updated_series', 0)} bumped"
@@ -3271,7 +3505,7 @@ def preview_import_run(
     from sqlalchemy import select
 
     from fakturek.importing import lookup_imported_id
-    from fakturek.models import Contact, Invoice, Subject, SubjectBankAccount
+    from fakturek.models import Contact, Invoice, Payment, Subject, SubjectBankAccount
 
     if int(getattr(run, "subject_id", 0) or 0) != int(subject_id):
         raise ValueError("Import run nepatří k aktuálnímu subjektu")
@@ -3435,7 +3669,35 @@ def preview_import_run(
             "warnings": [],
             "errors": [],
         },
+        "payments": {
+            "parsed": 0,
+            "will_create": 0,
+            "will_reuse": 0,
+            "will_skip": 0,
+            "errors": [],
+        },
     }
+
+    def _preview_mapped_payment(*, map_source: str, external_id: str):
+        mapped_id = lookup_imported_id(
+            db,
+            subject_id=int(subject_id),
+            source=str(map_source),
+            entity_type="payment",
+            external_id=str(external_id),
+        )
+        if mapped_id is None:
+            return None
+        payment = db.scalar(
+            select(Payment)
+            .join(Invoice, Invoice.id == Payment.invoice_id)
+            .where(Payment.id == int(mapped_id))
+            .where(Invoice.subject_id == int(subject_id))
+            .limit(1)
+        )
+        if payment is None:
+            raise ValueError("Mapování platby Fakturek XML nepatří k aktuálnímu subjektu")
+        return payment
 
     if assets.csv_bytes is not None:
         try:
@@ -3476,7 +3738,7 @@ def preview_import_run(
             invoice_parser, resolved_source = _select_invoice_parser(source, assets.xml_bytes)
             parsed_invoices = invoice_parser(assets.xml_bytes)
             preview["detected"]["xml_format"] = resolved_source
-            if resolved_source in {"fakturek_xml_v1", "fakturek_xml_legacy"}:
+            if resolved_source in _NATIVE_FAKTUREK_XML_FORMATS:
                 invoice_map_source = str(resolved_source)
         except Exception as exc:
             preview["invoices"]["errors"].append({"error": str(exc)})
@@ -3488,8 +3750,11 @@ def preview_import_run(
                 preview["invoices"]["errors"].append({"file": pdf_name, "error": str(exc)})
 
     preview["invoices"]["parsed"] = len(parsed_invoices)
+    preview["payments"]["parsed"] = sum(
+        len(list(getattr(invoice, "payments", []) or [])) for invoice in parsed_invoices
+    )
 
-    if invoice_map_source in {"fakturek_xml_v1", "fakturek_xml_legacy"} and parsed_invoices:
+    if invoice_map_source in _NATIVE_FAKTUREK_XML_FORMATS and parsed_invoices:
         native_actions: dict[str, str] = {}
         native_resolved: dict[str, object] = {}
         for inv in parsed_invoices:
@@ -3529,6 +3794,7 @@ def preview_import_run(
         planned_credits: dict[str, int] = {}
         existing_credit_totals: dict[str, int] = {}
         native_errors: list[dict[str, str]] = []
+        native_payment_errors: list[dict[str, str]] = []
         for inv in parsed_invoices:
             ext_id = str(inv.external_id or "").strip()
             if native_actions.get(ext_id) != "import" or inv.document_type != "credit_note":
@@ -3618,12 +3884,88 @@ def preview_import_run(
                     int(planned_credits.get(source_ext_id, 0) or 0) + proposed_credit
                 )
 
-        if native_errors:
+        if invoice_map_source == "fakturek_xml_v2":
+            for inv in parsed_invoices:
+                ext_id = str(inv.external_id or "").strip()
+                action = native_actions.get(ext_id)
+                invoice_payments = list(getattr(inv, "payments", []) or [])
+                if action == "skip":
+                    preview["payments"]["will_skip"] += len(invoice_payments)
+                    continue
+                if action == "existing":
+                    mapped_invoice = native_resolved.get(ext_id)
+                    if mapped_invoice is None:
+                        native_errors.append(
+                            {
+                                "invoice": str(inv.number or ""),
+                                "error": (
+                                    "Mapování faktury Fakturek XML nepatří "
+                                    "k aktuálnímu subjektu."
+                                ),
+                            }
+                        )
+                        continue
+                    for parsed_payment in invoice_payments:
+                        try:
+                            mapped_payment = _preview_mapped_payment(
+                                map_source=invoice_map_source,
+                                external_id=str(parsed_payment.external_id),
+                            )
+                        except ValueError as exc:
+                            native_payment_errors.append(
+                                {"invoice": str(inv.number or ""), "error": str(exc)}
+                            )
+                            continue
+                        if mapped_payment is None:
+                            # Replays deliberately do not mutate already-imported
+                            # payment history.
+                            preview["payments"]["will_skip"] += 1
+                        elif int(mapped_payment.invoice_id) != int(mapped_invoice.id):
+                            native_payment_errors.append(
+                                {
+                                    "invoice": str(inv.number or ""),
+                                    "error": (
+                                        "Mapování platby Fakturek XML odkazuje "
+                                        "na jinou fakturu."
+                                    ),
+                                }
+                            )
+                        else:
+                            preview["payments"]["will_reuse"] += 1
+                    continue
+
+                for parsed_payment in invoice_payments:
+                    try:
+                        mapped_payment = _preview_mapped_payment(
+                            map_source=invoice_map_source,
+                            external_id=str(parsed_payment.external_id),
+                        )
+                    except ValueError as exc:
+                        native_payment_errors.append(
+                            {"invoice": str(inv.number or ""), "error": str(exc)}
+                        )
+                        continue
+                    if mapped_payment is not None:
+                        native_payment_errors.append(
+                            {
+                                "invoice": str(inv.number or ""),
+                                "error": (
+                                    "Platba Fakturek XML už je namapovaná k jiné "
+                                    "importované faktuře."
+                                ),
+                            }
+                        )
+                    else:
+                        preview["payments"]["will_create"] += 1
+
+        if native_errors or native_payment_errors:
             preview["invoices"]["errors"].extend(native_errors)
+            preview["payments"]["errors"].extend(native_payment_errors)
             preview["ready_note"] = (
                 f"Kontakty: {preview['contacts']['parsed']} nalezeno, "
                 f"{preview['contacts']['will_create']} nových. "
-                f"Faktury: {len(parsed_invoices)} nalezeno, import blokují chyby vazeb dobropisů."
+                f"Faktury: {len(parsed_invoices)} nalezeno, "
+                "import blokují chyby integrity faktur nebo plateb."
             )
             return preview
 
@@ -3693,7 +4035,9 @@ def preview_import_run(
         f"Kontakty: {preview['contacts']['parsed']} nalezeno, "
         f"{preview['contacts']['will_create']} nových. "
         f"Faktury: {preview['invoices']['parsed']} nalezeno, "
-        f"{preview['invoices']['will_import']} připraveno k importu."
+        f"{preview['invoices']['will_import']} připraveno k importu. "
+        f"Platby: {preview['payments']['parsed']} nalezeno, "
+        f"{preview['payments']['will_create']} nových."
     )
     return preview
 

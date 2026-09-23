@@ -13,6 +13,7 @@ from fakturek.fakturoid_import import (
     detect_xml_import_format,
     parse_fakturek_invoices_xml_legacy,
     parse_fakturek_invoices_xml_v1,
+    parse_fakturek_invoices_xml_v2,
     parse_fakturoid_invoices_xml,
     parse_money_s3_invoices_xml,
     parse_pohoda_invoices_xml,
@@ -237,6 +238,23 @@ FAKTUREK_XML_LEGACY = (
 ).encode("utf-8")
 
 
+def _fakturek_xml_v2_payload() -> bytes:
+    root = ET.fromstring(FAKTUREK_XML_V1)
+    root.attrib["version"] = "2"
+    invoice = root.find("./invoices/invoice")
+    assert invoice is not None
+    payments = ET.SubElement(invoice, "payments", {"count": "2"})
+    first = ET.SubElement(payments, "payment", {"id": "901"})
+    ET.SubElement(first, "paid_on").text = "2026-09-03"
+    ET.SubElement(first, "amount_cents").text = "12100"
+    ET.SubElement(first, "note").text = "První platba"
+    second = ET.SubElement(payments, "payment", {"id": "902"})
+    ET.SubElement(second, "paid_on").text = "2026-09-04"
+    ET.SubElement(second, "amount_cents").text = "-100"
+    ET.SubElement(second, "note").text = "  Korekce  "
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
 def test_parse_fakturoid_xml_basic():
     invs = parse_fakturoid_invoices_xml(SAMPLE_XML)
     assert len(invs) == 1
@@ -268,12 +286,13 @@ def test_detect_xml_import_format_variants():
     assert detect_xml_import_format(POHODA_XML) == "pohoda_xml"
     assert detect_xml_import_format(MONEY_S3_XML) == "money_s3_xml"
     assert detect_xml_import_format(FAKTUREK_XML_V1) == "fakturek_xml_v1"
+    assert detect_xml_import_format(_fakturek_xml_v2_payload()) == "fakturek_xml_v2"
     assert detect_xml_import_format(FAKTUREK_XML_LEGACY) == "fakturek_xml_legacy"
 
 
 def test_detect_fakturek_xml_rejects_unknown_version_and_kind():
     with pytest.raises(ValueError, match="verze"):
-        detect_xml_import_format(FAKTUREK_XML_V1.replace(b'version="1"', b'version="2"'))
+        detect_xml_import_format(FAKTUREK_XML_V1.replace(b'version="1"', b'version="99"'))
     with pytest.raises(ValueError, match="typ"):
         detect_xml_import_format(FAKTUREK_XML_V1.replace(b'kind="invoice_export"', b'kind="contacts"'))
 
@@ -298,6 +317,78 @@ def test_parse_fakturek_xml_v1_preserves_native_semantics():
     assert invoice.iban == "CZ6508000000192000145399"
     assert invoice.source_invoice_external_id == "v1:12:invoice:1"
     assert invoice.lines[0].total_cents == 12100
+    assert invoice.payments == []
+
+
+def test_parse_fakturek_xml_v2_preserves_ordered_signed_payments_without_changing_v1():
+    payload = _fakturek_xml_v2_payload()
+    invoice = parse_fakturek_invoices_xml_v2(payload)[0]
+
+    assert invoice.external_id == "v2:12:invoice:42"
+    assert invoice.buyer_external_id == "v2:12:contact:8"
+    assert [payment.external_id for payment in invoice.payments] == [
+        "v2:12:payment:901",
+        "v2:12:payment:902",
+    ]
+    assert [payment.paid_on for payment in invoice.payments] == [
+        date(2026, 9, 3),
+        date(2026, 9, 4),
+    ]
+    assert [payment.amount_cents for payment in invoice.payments] == [12100, -100]
+    assert [payment.note for payment in invoice.payments] == ["První platba", "  Korekce  "]
+
+    # The exact same extension remains ignored by the v1 parser: v1 keeps its
+    # original schema and import behavior.
+    v1_with_extension = payload.replace(b'version="2"', b'version="1"')
+    parsed_v1 = parse_fakturek_invoices_xml_v1(v1_with_extension)
+    assert parsed_v1[0].payments == []
+
+
+@pytest.mark.parametrize(
+    ("case", "error"),
+    [
+        ("count", "payments@count"),
+        ("duplicate_id", "duplicitní payment@id"),
+        ("date", "ISO datum"),
+        ("range", "mimo povolený rozsah"),
+        ("note", "příliš dlouhé"),
+        ("carriage_return", "nepovolené znaky"),
+        ("noncharacter", "nepovolené znaky"),
+    ],
+)
+def test_parse_fakturek_xml_v2_rejects_malformed_payment_document(case, error):
+    root = ET.fromstring(_fakturek_xml_v2_payload())
+    payments = root.find("./invoices/invoice/payments")
+    assert payments is not None
+    rows = payments.findall("./payment")
+    assert len(rows) == 2
+    if case == "count":
+        payments.attrib["count"] = "3"
+    elif case == "duplicate_id":
+        rows[1].attrib["id"] = rows[0].attrib["id"]
+    elif case == "date":
+        rows[0].find("./paid_on").text = "2026-02-30"
+    elif case == "range":
+        rows[0].find("./amount_cents").text = "2147483648"
+    elif case == "note":
+        rows[0].find("./note").text = "x" * 256
+
+    payload = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    if case == "carriage_return":
+        payload = payload.replace(b"Prvn\xc3\xad platba", b"Prvn\xc3\xad&#13;platba")
+    elif case == "noncharacter":
+        payload = payload.replace(b"Prvn\xc3\xad platba", "První\ufdd0platba".encode())
+
+    with pytest.raises(ValueError, match=error):
+        parse_fakturek_invoices_xml_v2(payload)
+
+
+def test_fakturek_xml_v2_payment_note_profile_rejects_surrogates_and_keeps_valid_text():
+    from fakturek.fakturoid_import import fakturek_xml_payment_note_is_roundtrip_safe
+
+    assert fakturek_xml_payment_note_is_roundtrip_safe("Řádek 1\n\třádek 2 🙂")
+    assert not fakturek_xml_payment_note_is_roundtrip_safe("x\ud800y")
+    assert not fakturek_xml_payment_note_is_roundtrip_safe("x\U0001fffey")
 
 
 def test_parse_legacy_fakturek_export_reads_attributes_and_nested_contact():

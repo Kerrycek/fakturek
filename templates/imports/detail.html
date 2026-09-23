@@ -160,6 +160,24 @@
             <span class="stat-label">Nové kontakty z faktur</span>
             <strong class="stat-value">{{ preview.invoices.will_create_contacts }}</strong>
           </article>
+          {% if preview.payments and preview.payments.parsed %}
+            <article class="stat-card">
+              <span class="stat-label">Platby nalezené</span>
+              <strong class="stat-value">{{ preview.payments.parsed }}</strong>
+            </article>
+            <article class="stat-card">
+              <span class="stat-label">Platby nové</span>
+              <strong class="stat-value">{{ preview.payments.will_create }}</strong>
+            </article>
+            <article class="stat-card">
+              <span class="stat-label">Platby znovupoužité</span>
+              <strong class="stat-value">{{ preview.payments.will_reuse }}</strong>
+            </article>
+            <article class="stat-card">
+              <span class="stat-label">Platby bez zásahu</span>
+              <strong class="stat-value">{{ preview.payments.will_skip }}</strong>
+            </article>
+          {% endif %}
         </div>
       </div>
 
@@ -247,7 +265,12 @@
         {% endif %}
       </div>
 
-      {% if preview.invoices.warnings or preview.contacts.errors or preview.invoices.errors %}
+      {% if
+        preview.invoices.warnings
+        or preview.contacts.errors
+        or preview.invoices.errors
+        or (preview.payments and preview.payments.errors)
+      %}
         <div class="card stack-md">
           <div class="section-heading">
             <p class="page-kicker">Kontrola</p>
@@ -279,6 +302,16 @@
               <ul>
                 {% for item in preview.invoices.errors %}
                   <li>{{ item.number or item.file or item.external_id or 'Faktura' }}: {{ item.error }}</li>
+                {% endfor %}
+              </ul>
+            </div>
+          {% endif %}
+          {% if preview.payments and preview.payments.errors %}
+            <div class="stack-sm">
+              <strong>Chyby u plateb</strong>
+              <ul>
+                {% for item in preview.payments.errors %}
+                  <li>{{ item.invoice or item.external_id or 'Platba' }}: {{ item.error }}</li>
                 {% endfor %}
               </ul>
             </div>
