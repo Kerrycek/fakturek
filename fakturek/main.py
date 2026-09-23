@@ -13187,7 +13187,7 @@ def create_app() -> FastAPI:
     INVOICE_EXPORT_FORMAT_OPTIONS: list[tuple[str, str]] = [
         ("csv", "CSV přehled faktur"),
         ("csv_bundle", "CSV + položky v ZIPu"),
-        ("xml", "Fakturek XML"),
+        ("xml", "Fakturek XML v1"),
         ("isdoc_zip", "ISDOC (ZIP)"),
         ("pohoda_xml", "POHODA XML"),
         ("money_s3_xml", "Money S3 XML"),
@@ -13334,6 +13334,46 @@ def create_app() -> FastAPI:
         invoices: list[Invoice],
         subject_id: int,
     ) -> bytes:
+        selected_invoices = list(invoices)
+        selected_ids = {int(invoice.id) for invoice in selected_invoices}
+        dependency_ids = {
+            int(invoice.source_invoice_id)
+            for invoice in selected_invoices
+            if _normalize_invoice_document_type(getattr(invoice, "document_type", "invoice"))
+            == "credit_note"
+            and getattr(invoice, "source_invoice_id", None) is not None
+            and int(invoice.source_invoice_id) not in selected_ids
+        }
+        dependency_invoices: list[Invoice] = []
+        if dependency_ids:
+            dependency_invoices = list(
+                db.scalars(
+                    select(Invoice)
+                    .where(Invoice.subject_id == int(subject_id))
+                    .where(Invoice.id.in_(sorted(dependency_ids)))
+                    .order_by(Invoice.id.asc())
+                ).all()
+            )
+            if {int(invoice.id) for invoice in dependency_invoices} != dependency_ids:
+                raise ValueError("Dobropis nelze exportovat bez původní faktury.")
+        invoices = dependency_invoices + selected_invoices
+        invoices_by_id = {int(invoice.id): invoice for invoice in invoices}
+        for credit_note in selected_invoices:
+            if _normalize_invoice_document_type(getattr(credit_note, "document_type", "invoice")) != "credit_note":
+                continue
+            source_id = getattr(credit_note, "source_invoice_id", None)
+            source_invoice = invoices_by_id.get(int(source_id)) if source_id is not None else None
+            if source_invoice is None:
+                raise ValueError("Dobropis nelze exportovat bez původní faktury.")
+            if _normalize_invoice_document_type(getattr(source_invoice, "document_type", "invoice")) != "invoice":
+                raise ValueError("Původní doklad dobropisu není běžná faktura.")
+            if str(getattr(source_invoice, "status", "") or "").strip().lower() == "draft":
+                raise ValueError("Dobropis nelze exportovat s původní fakturou ve stavu konceptu.")
+            if str(getattr(source_invoice, "currency", "") or "").upper() != str(
+                getattr(credit_note, "currency", "") or ""
+            ).upper():
+                raise ValueError("Měna dobropisu neodpovídá původní faktuře.")
+
         invoice_ids = [int(invoice.id) for invoice in invoices]
         item_rows = _export_invoice_items_rows(db, subject_id=int(subject_id), invoice_ids=invoice_ids)
         items_by_invoice: dict[int, list[dict[str, object]]] = defaultdict(list)
@@ -13344,11 +13384,21 @@ def create_app() -> FastAPI:
             "fakturek_export",
             {
                 "kind": "invoice_export",
-                "subject_id": str(int(subject_id)),
+                "format": "fakturek_invoice_export",
+                "version": "1",
+                "origin_subject_id": str(int(subject_id)),
                 "generated_at_utc": utc_now().isoformat(timespec="seconds"),
             },
         )
-        invoices_el = ET.SubElement(root, "invoices", {"count": str(len(invoices))})
+        invoices_el = ET.SubElement(
+            root,
+            "invoices",
+            {
+                "count": str(len(invoices)),
+                "selected_count": str(len(selected_invoices)),
+                "dependency_count": str(len(dependency_invoices)),
+            },
+        )
 
         for invoice in invoices:
             invoice_el = ET.SubElement(
@@ -13364,14 +13414,23 @@ def create_app() -> FastAPI:
             contact = getattr(invoice, "contact", None)
             invoice_values = {
                 "issue_date": _iso_to_export_str(getattr(invoice, "issue_date", None)),
+                "taxable_supply_date": _iso_to_export_str(_invoice_taxable_supply_date(invoice)),
                 "due_date": _iso_to_export_str(getattr(invoice, "due_date", None)),
                 "paid_on": _iso_to_export_str(getattr(invoice, "paid_on", None)),
+                "sent_at": _iso_to_export_str(getattr(invoice, "sent_at", None)),
                 "currency": str(invoice.currency or ""),
+                "variable_symbol": str(getattr(invoice, "variable_symbol", "") or ""),
+                "payment_method": str(getattr(invoice, "payment_method", "") or "bank_transfer"),
                 "total_cents": str(int(getattr(invoice, "total_cents", 0) or 0)),
                 "discount_cents": str(int(getattr(invoice, "discount_cents", 0) or 0)),
                 "rounding_adjustment_cents": str(int(getattr(invoice, "rounding_adjustment_cents", 0) or 0)),
                 "notes": str(getattr(invoice, "notes", "") or ""),
                 "internal_notes": str(getattr(invoice, "internal_notes", "") or ""),
+                "source_invoice_id": (
+                    str(int(invoice.source_invoice_id))
+                    if getattr(invoice, "source_invoice_id", None) is not None
+                    else ""
+                ),
                 "source_invoice_number": _invoice_source_invoice_number(db, invoice=invoice),
             }
             for key, value in invoice_values.items():
@@ -13382,9 +13441,25 @@ def create_app() -> FastAPI:
                 "id": str(int(getattr(contact, "id", 0) or 0)),
                 "name": str(getattr(contact, "name", "") or ""),
                 "email": str(getattr(contact, "email", "") or ""),
+                "phone": str(getattr(contact, "phone", "") or ""),
+                "street": str(getattr(contact, "street", "") or ""),
+                "city": str(getattr(contact, "city", "") or ""),
+                "zip": str(getattr(contact, "zip", "") or ""),
+                "country": str(getattr(contact, "country", "") or "CZ"),
                 "ico": str(getattr(contact, "ico", "") or ""),
+                "dic": str(getattr(contact, "dic", "") or ""),
             }.items():
                 ET.SubElement(contact_el, key).text = value
+
+            bank_el = ET.SubElement(invoice_el, "bank_account")
+            for key, value in {
+                "label": str(getattr(invoice, "bank_account_label", "") or ""),
+                "number": str(getattr(invoice, "bank_account_number", "") or ""),
+                "iban": str(getattr(invoice, "bank_account_iban", "") or ""),
+                "bic": str(getattr(invoice, "bank_account_bic", "") or ""),
+                "country": str(getattr(invoice, "bank_account_country", "") or ""),
+            }.items():
+                ET.SubElement(bank_el, key).text = value
 
             items_el = ET.SubElement(invoice_el, "items", {"count": str(len(items_by_invoice.get(int(invoice.id), [])))})
             for item_row in items_by_invoice.get(int(invoice.id), []):
@@ -13403,7 +13478,8 @@ def create_app() -> FastAPI:
                     "line_total",
                     "line_total_cents",
                 ]:
-                    ET.SubElement(item_el, key).text = str(item_row.get(key, "") or "")
+                    raw_value = item_row.get(key, "")
+                    ET.SubElement(item_el, key).text = "" if raw_value is None else str(raw_value)
 
         return ET.tostring(root, encoding="utf-8", xml_declaration=True)
 
@@ -13769,11 +13845,14 @@ def create_app() -> FastAPI:
                 )
 
             if prefill["format"] == "xml":
-                xml_bytes = _build_invoice_export_xml_bytes(
-                    db,
-                    invoices=invoices,
-                    subject_id=int(sid),
-                )
+                try:
+                    xml_bytes = _build_invoice_export_xml_bytes(
+                        db,
+                        invoices=invoices,
+                        subject_id=int(sid),
+                    )
+                except ValueError as exc:
+                    return _render_export_error(str(exc), status_code=422)
                 return Response(
                     content=xml_bytes,
                     media_type="application/xml; charset=utf-8",
@@ -13913,8 +13992,8 @@ def create_app() -> FastAPI:
         },
         {
             "value": "invoice_xml",
-            "label": "Faktury XML",
-            "description": "Samotné faktury v XML, ISDOC nebo ZIP s XML. Dobré pro strukturovaný přesun bez kontaktového CSV.",
+            "label": "Fakturek XML / jiné XML",
+            "description": "Znovu importuje Fakturek XML v1 i starší exporty; podporuje také ISDOC a další strukturované XML faktury.",
             "accept": ".xml,.isdoc,.zip,application/xml,application/zip",
         },
         {
