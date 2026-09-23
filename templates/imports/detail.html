@@ -99,12 +99,23 @@
             <article class="stat-card"><span class="stat-label">Kontakty nové</span><strong class="stat-value">{{ preview.contacts.will_create }}</strong></article>
             <article class="stat-card"><span class="stat-label">Katalogové položky</span><strong class="stat-value">{{ preview.catalog_items.parsed }}</strong></article>
             <article class="stat-card"><span class="stat-label">Položky nové</span><strong class="stat-value">{{ preview.catalog_items.will_create }}</strong></article>
+            {% if preview.native_backup_v2 %}
+              <article class="stat-card"><span class="stat-label">Bankovní účty</span><strong class="stat-value">{{ preview.bank_accounts.parsed }}</strong></article>
+              <article class="stat-card"><span class="stat-label">Účty nové</span><strong class="stat-value">{{ preview.bank_accounts.will_create }}</strong></article>
+              <article class="stat-card"><span class="stat-label">Nastaví se jako výchozí</span><strong class="stat-value">{{ preview.bank_accounts.will_default }}</strong></article>
+            {% endif %}
           </div>
           <div class="table-wrap"><table class="table"><tbody>
             <tr><th>Kontakty checksum</th><td>{{ preview.datasets.contacts.checksum }}</td></tr>
             <tr><th>Katalog checksum</th><td>{{ preview.datasets.catalog_items.checksum }}</td></tr>
+            {% if preview.native_backup_v2 %}<tr><th>Účty checksum</th><td>{{ preview.datasets.bank_accounts.checksum }}</td></tr>{% endif %}
             <tr><th>Zdrojový subjekt</th><td>Jen informativní — importuje se do aktuálního subjektu.</td></tr>
           </tbody></table></div>
+          {% if preview.native_backup_v2 %}
+            <p><strong>Účty, které už existují, se nikdy nepřepisují.</strong> Výchozí účet se nastaví jen tehdy, když cílový subjekt žádný nemá. Nové účty zachovají vzájemné pořadí zálohy a zařadí se za cílové účty. Tokeny, synchronizace a transakce nejsou součástí zálohy.</p>
+            <p class="muted"><small>Náhled je aktuální, ale nezávazný: soubor i cílové účty se znovu ověří při spuštění importu.</small></p>
+            {% for warning in preview.bank_accounts.warnings %}<p class="muted"><small>{{ warning }}</small></p>{% endfor %}
+          {% endif %}
           <form method="post" action="/imports/{{ run.id }}/config" class="form stack-sm">
             {{ csrf_input(request)|safe }}
             <div class="field">

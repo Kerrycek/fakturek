@@ -25,6 +25,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from fakturek.api_tokens import hash_api_token_value
+from fakturek.bank_account_lock import lock_subject_bank_account_mutations
 from fakturek.bank_sync import (
     EMAIL_BANK_PARSER_OPTIONS,
     BankSyncError,
@@ -3482,7 +3483,20 @@ class ApiV1Builder:
             )
             if replay is not None:
                 return replay
-            account = self._load_bank_account_for_subject(db, subject_id=subject_id, bank_account_id=bank_account_id)
+            stable_subject_id = int(subject_id)
+            stable_bank_account_id = int(bank_account_id)
+            # Access and idempotency checks above are intentionally retained,
+            # but their reads must not stay open while contacting the bank.
+            db.commit()
+            account = self._load_bank_account_for_subject(
+                db,
+                subject_id=stable_subject_id,
+                bank_account_id=stable_bank_account_id,
+            )
+            # Retain a loaded snapshot for pre-I/O configuration reads without
+            # letting commit expire it and lazily reopen a transaction.
+            db.expunge(account)
+            db.commit()
             response_model = self._sync_subject_bank_account(db, account=account)
             self._remember_idempotent_response(
                 db,
@@ -3492,7 +3506,7 @@ class ApiV1Builder:
                 request_hash=self._request_hash({}, exclude_unset=False),
                 response_status=200,
                 response_body=response_model.model_dump(),
-                subject_id=int(subject_id),
+                subject_id=stable_subject_id,
             )
             db.commit()
             return response_model
@@ -6469,6 +6483,42 @@ class ApiV1Builder:
             return today_value, today_value
         return max(cursor_date - timedelta(days=BANK_SYNC_OVERLAP_DAYS), today_value - timedelta(days=365)), today_value
 
+    def _payment_sync_configuration_snapshot(self, account: SubjectBankAccount) -> tuple[object, ...]:
+        """Capture sync inputs before external I/O, for a post-I/O CAS check."""
+        return (
+            self._normalize_payment_sync_provider(getattr(account, "payment_sync_provider", None)),
+            bool(getattr(account, "payment_sync_enabled", False)),
+            bool(getattr(account, "payment_sync_auto_pair", True)),
+            getattr(account, "fio_api_token", None),
+            getattr(account, "payment_sync_cursor_date", None),
+            str(getattr(account, "payment_sync_last_email_uid", "") or "").strip(),
+            self._normalize_payment_sync_email_parser(getattr(account, "payment_sync_email_parser", None)),
+            str(getattr(account, "payment_sync_email_sender_filter", "") or "").strip().lower(),
+            str(getattr(account, "payment_sync_email_subject_filter", "") or "").strip().lower(),
+            str(getattr(account, "payment_sync_alert_localpart", "") or "").strip(),
+        )
+
+    def _lock_bank_account_sync_configuration(
+        self,
+        db: Session,
+        *,
+        account: SubjectBankAccount,
+        snapshot: tuple[object, ...],
+    ) -> SubjectBankAccount | None:
+        """Serialize post-fetch bank mutations and reject stale sync results."""
+        lock_subject_bank_account_mutations(db, subject_id=int(account.subject_id))
+        refreshed = db.scalar(
+            select(SubjectBankAccount)
+            .where(SubjectBankAccount.id == int(account.id))
+            .where(SubjectBankAccount.subject_id == int(account.subject_id))
+            .limit(1)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if refreshed is None or self._payment_sync_configuration_snapshot(refreshed) != snapshot:
+            return None
+        return refreshed
+
     def _body_preview(self, value: str | None, *, limit: int = 200) -> str | None:
         text = re.sub(r"\s+", " ", str(value or "")).strip()
         if not text:
@@ -6776,6 +6826,7 @@ class ApiV1Builder:
         db: Session,
         *,
         account: SubjectBankAccount,
+        snapshot: tuple[object, ...],
     ) -> BankSyncRunAccountModel:
         imap_host = str(getattr(self.settings, "payment_sync_imap_host", "") or "").strip()
         imap_username = str(getattr(self.settings, "payment_sync_imap_username", "") or "").strip()
@@ -6794,6 +6845,10 @@ class ApiV1Builder:
             "errors": [],
         }
         if not imap_host or not imap_username or not imap_password:
+            account = self._lock_bank_account_sync_configuration(db, account=account, snapshot=snapshot)
+            if account is None:
+                return BankSyncRunAccountModel(**result)
+            account.payment_sync_last_checked_at = utc_now()
             account.payment_sync_last_error = "IMAP schránka pro bankovní notifikace zatím není nastavená."
             db.add(account)
             result["errors"].append(str(account.payment_sync_last_error))
@@ -6820,11 +6875,25 @@ class ApiV1Builder:
                 getattr(account, "id", "?"),
                 type(exc).__name__,
             )
+            account = self._lock_bank_account_sync_configuration(db, account=account, snapshot=snapshot)
+            if account is None:
+                return BankSyncRunAccountModel(**result)
+            account.payment_sync_last_checked_at = utc_now()
             account.payment_sync_last_error = safe_bank_sync_error_message(exc)
             db.add(account)
             result["errors"].append(account.payment_sync_last_error)
             return BankSyncRunAccountModel(**result)
 
+        account = self._lock_bank_account_sync_configuration(db, account=account, snapshot=snapshot)
+        if account is None:
+            return BankSyncRunAccountModel(**result)
+        account.payment_sync_last_checked_at = utc_now()
+        parser_name = self._normalize_payment_sync_email_parser(getattr(account, "payment_sync_email_parser", None))
+        auto_pair = bool(getattr(account, "payment_sync_auto_pair", True))
+        sender_filter = str(getattr(account, "payment_sync_email_sender_filter", "") or "").strip().lower() or self._payment_sync_email_defaults(parser_name).get("sender", "")
+        subject_filter = str(getattr(account, "payment_sync_email_subject_filter", "") or "").strip().lower() or self._payment_sync_email_defaults(parser_name).get("subject", "").lower()
+        recipient_filter = self._payment_sync_alert_email_for_account(account).strip().lower()
+        previous_last_email_uid = str(getattr(account, "payment_sync_last_email_uid", "") or "").strip()
         result["fetched"] = len(imported_emails)
         highest_uid = previous_last_email_uid
         if not previous_last_email_uid and imported_emails:
@@ -6916,11 +6985,10 @@ class ApiV1Builder:
         return BankSyncRunAccountModel(**result)
 
     def _sync_subject_bank_account(self, db: Session, *, account: SubjectBankAccount) -> BankSyncRunAccountModel:
+        snapshot = self._payment_sync_configuration_snapshot(account)
         provider = self._normalize_payment_sync_provider(getattr(account, "payment_sync_provider", None))
         enabled = bool(getattr(account, "payment_sync_enabled", False))
         now_utc = utc_now()
-        account.payment_sync_last_checked_at = now_utc
-        db.add(account)
 
         result = {
             "bank_account_id": int(account.id),
@@ -6935,11 +7003,20 @@ class ApiV1Builder:
         }
 
         if not enabled or provider == "none":
+            account = self._lock_bank_account_sync_configuration(db, account=account, snapshot=snapshot)
+            if account is None:
+                return BankSyncRunAccountModel(**result)
+            account.payment_sync_last_checked_at = now_utc
             account.payment_sync_last_error = None
+            db.add(account)
             return BankSyncRunAccountModel(**result)
         if provider == "email_bank":
-            return self._sync_subject_bank_account_email(db, account=account)
+            return self._sync_subject_bank_account_email(db, account=account, snapshot=snapshot)
         if provider != "fio_api":
+            account = self._lock_bank_account_sync_configuration(db, account=account, snapshot=snapshot)
+            if account is None:
+                return BankSyncRunAccountModel(**result)
+            account.payment_sync_last_checked_at = now_utc
             account.payment_sync_last_error = "Tento provider zatím neumíme synchronizovat."
             db.add(account)
             result["errors"].append(str(account.payment_sync_last_error))
@@ -6947,6 +7024,10 @@ class ApiV1Builder:
 
         token = self._decode_fio_api_token(getattr(account, "fio_api_token", None))
         if not token:
+            account = self._lock_bank_account_sync_configuration(db, account=account, snapshot=snapshot)
+            if account is None:
+                return BankSyncRunAccountModel(**result)
+            account.payment_sync_last_checked_at = now_utc
             account.payment_sync_last_error = "Chybí Fio API token."
             db.add(account)
             result["errors"].append(str(account.payment_sync_last_error))
@@ -6967,6 +7048,10 @@ class ApiV1Builder:
                 getattr(account, "id", "?"),
                 type(exc).__name__,
             )
+            account = self._lock_bank_account_sync_configuration(db, account=account, snapshot=snapshot)
+            if account is None:
+                return BankSyncRunAccountModel(**result)
+            account.payment_sync_last_checked_at = now_utc
             account.payment_sync_last_error = safe_bank_sync_error_message(exc)
             db.add(account)
             result["errors"].append(account.payment_sync_last_error)
@@ -6975,6 +7060,10 @@ class ApiV1Builder:
                 result["matched"] += retry_matched
             return BankSyncRunAccountModel(**result)
 
+        account = self._lock_bank_account_sync_configuration(db, account=account, snapshot=snapshot)
+        if account is None:
+            return BankSyncRunAccountModel(**result)
+        account.payment_sync_last_checked_at = now_utc
         result["fetched"] = len(imported_transactions)
         newest_booked_on = date_from
         auto_pair = bool(getattr(account, "payment_sync_auto_pair", True))
@@ -7008,11 +7097,14 @@ class ApiV1Builder:
         return BankSyncRunAccountModel(**result)
 
     def _run_bank_sync_for_subject(self, db: Session, *, subject_id: int) -> BankSyncRunResponse:
-        accounts = db.scalars(
-            select(SubjectBankAccount)
+        account_ids = db.scalars(
+            select(SubjectBankAccount.id)
             .where(SubjectBankAccount.subject_id == int(subject_id))
             .order_by(SubjectBankAccount.sort_order.asc(), SubjectBankAccount.id.asc())
         ).all()
+        # The account list is a stable work queue, not a set of objects to
+        # mutate.  End this read transaction before any bank request.
+        db.commit()
         summary = {
             "subject_id": int(subject_id),
             "fetched": 0,
@@ -7024,7 +7116,20 @@ class ApiV1Builder:
             "errors": [],
             "accounts": [],
         }
-        for account in accounts:
+        for bank_account_id in account_ids:
+            account = db.scalar(
+                select(SubjectBankAccount)
+                .where(SubjectBankAccount.subject_id == int(subject_id))
+                .where(SubjectBankAccount.id == int(bank_account_id))
+                .limit(1)
+                .execution_options(populate_existing=True)
+            )
+            if account is None:
+                continue
+            # Keep only a loaded detached snapshot for pre-I/O reads, then
+            # close the transaction opened by the fresh account SELECT.
+            db.expunge(account)
+            db.commit()
             account_result = self._sync_subject_bank_account(db, account=account)
             summary["accounts"].append(account_result)
             summary["fetched"] += int(account_result.fetched)
@@ -7035,6 +7140,9 @@ class ApiV1Builder:
             if account_result.baseline_seeded:
                 summary["baseline_seeded"] = True
             summary["errors"].extend(list(account_result.errors or []))
+            # _sync_subject_bank_account obtains the subject lock only after
+            # I/O.  Commit now so it cannot survive into the next fetch.
+            db.commit()
         return BankSyncRunResponse(**summary)
 
     @staticmethod

@@ -233,6 +233,13 @@
                   <small>Přenosná záloha kontaktů a katalogu bez faktur, plateb nebo citlivých nastavení.</small>
                 </span>
               </a>
+              <a class="import-export-action" href="/exports/native-backup-v2.zip">
+                <span class="import-export-action-icon"><i class="ti ti-building-bank" aria-hidden="true"></i></span>
+                <span>
+                  <strong>Fakturek native backup v2</strong>
+                  <small>Kontakty, katalog a bezpečná data účtů. Bez tokenů, synchronizace nebo transakcí.</small>
+                </span>
+              </a>
             </div>
           {% else %}
             <p class="muted">Exporty jsou dostupné jen uživatelům s oprávněním Exportovat.</p>
@@ -275,12 +282,12 @@
 
             <div class="import-export-supported">
               <strong>Podporované soubory</strong>
-              <span>Fakturek katalog CSV v1, native backup v1, Fakturoid, CSV kontaktů, XML/ISDOC faktury, PDF/ZIP, POHODA XML a Money S3 XML.</span>
+              <span>Fakturek katalog CSV v1, native backup v1 a v2, Fakturoid, CSV kontaktů, XML/ISDOC faktury, PDF/ZIP, POHODA XML a Money S3 XML.</span>
             </div>
 
             <div class="form-row import-file-field">
               <label for="file">Soubor</label>
-              <input id="file" type="file" name="file" required accept=".xml,.isdoc,.csv,.zip,.pdf,application/xml,text/csv,application/zip,application/vnd.fakturek.native-backup+zip,application/pdf" />
+              <input id="file" type="file" name="file" required accept=".xml,.isdoc,.csv,.zip,.pdf,application/xml,text/csv,application/zip,application/vnd.fakturek.native-backup+zip,application/vnd.fakturek.native-backup-v2+zip,application/pdf" />
               {% if max_upload_mb %}
                 <div class="muted"><small>XML, ISDOC, PDF, CSV nebo ZIP. Max {{ max_upload_mb }} MB.</small></div>
               {% else %}
