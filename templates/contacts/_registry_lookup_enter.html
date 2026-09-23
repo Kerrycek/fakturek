@@ -1,0 +1,24 @@
+<script>
+  (() => {
+    const form = document.querySelector('[data-contact-registry-form]');
+    const icoInput = form?.querySelector('[data-contact-registry-ico]');
+    if (!form || !icoInput) return;
+
+    icoInput.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' || event.isComposing) return;
+
+      const country = form.querySelector('select[name="country"]')?.value || 'CZ';
+      const provider = country === 'SK' ? 'rpo' : 'ares';
+      const lookupButton = form.querySelector(`[data-contact-registry-submit="${provider}"]`);
+      if (!lookupButton) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      if (form.requestSubmit) {
+        form.requestSubmit(lookupButton);
+      } else {
+        lookupButton.click();
+      }
+    });
+  })();
+</script>

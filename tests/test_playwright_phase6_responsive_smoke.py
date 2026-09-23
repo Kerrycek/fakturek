@@ -97,6 +97,8 @@ def test_phase6_responsive_core_routes_have_no_unintended_horizontal_scroll(
                 ("/", "dashboard"),
                 ("/invoices", "invoices"),
                 ("/invoices/new", "invoice-editor"),
+                ("/contacts/new", "contact-new"),
+                ("/contacts/1/edit", "contact-edit"),
                 ("/settings", "settings"),
             ]
             for width, height in [

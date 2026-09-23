@@ -1182,6 +1182,62 @@ def create_app() -> FastAPI:
             "country_options_rest": CONTACT_COUNTRY_OPTIONS_REST,
         }
 
+    def _lookup_contact_prefill(
+        db: Session,
+        prefill: dict[str, str],
+        lookup: object | None,
+    ) -> tuple[str | None, str | None]:
+        provider_key = str(lookup or "").strip().lower()
+        ico = str(prefill.get("ico") or "").strip()
+        if not ico:
+            return None, None
+
+        from fakturek.company_lookup import (
+            CompanyLookupError,
+            lookup_cz_company_prefill_with_cache,
+            lookup_sk_company_prefill_with_cache,
+        )
+        from fakturek.settings import get_settings
+
+        settings = get_settings()
+        try:
+            if provider_key == "ares":
+                company, source = lookup_cz_company_prefill_with_cache(
+                    db,
+                    ico,
+                    base_url=settings.ares_base_url,
+                    timeout_seconds=settings.ares_timeout_seconds,
+                    cache_ttl_days=settings.company_lookup_cache_ttl_days,
+                )
+                label = "ARES"
+            elif provider_key in {"rpo", "sk"}:
+                company, source, provider = lookup_sk_company_prefill_with_cache(
+                    db,
+                    ico,
+                    rpo_base_url=settings.sk_rpo_base_url,
+                    rpo_timeout_seconds=settings.sk_rpo_timeout_seconds,
+                    orsr_base_url=settings.sk_orsr_base_url,
+                    orsr_timeout_seconds=settings.sk_orsr_timeout_seconds,
+                    cache_ttl_days=settings.company_lookup_cache_ttl_days,
+                )
+                label = "RPO" if provider == "rpo" else "ORSR"
+            else:
+                return None, None
+        except CompanyLookupError as exc:
+            return None, str(exc)
+
+        if company.name:
+            prefill["name"] = company.name
+        prefill["street"] = company.street
+        prefill["city"] = company.city
+        prefill["zip"] = company.zip
+        prefill["country"] = company.country or ("SK" if provider_key in {"rpo", "sk"} else "CZ")
+        prefill["ico"] = company.ico
+        prefill["dic"] = company.dic
+
+        info = f"Načteno z {label}." if source == "live" else f"Načteno z {label} (cache)."
+        return info, None
+
     def _normalize_payment_sync_provider(value: str | None) -> str:
         normalized = str(value or "none").strip().lower() or "none"
         if normalized not in {provider for provider, _label in PAYMENT_SYNC_PROVIDER_OPTIONS}:
@@ -15752,7 +15808,9 @@ def create_app() -> FastAPI:
 
         @app.get("/contacts/new", response_class=HTMLResponse)
         def contacts_new(request: Request, db: Session = Depends(get_db)):
-            # Support prefill via query params (used by the "Načíst z ARES" button).
+            # Query parameters can prefill the form, but registry lookups are
+            # deliberately POST-only because they perform provider I/O and
+            # update the lookup cache.
             qp = request.query_params
             prefill = {
                 "name": (qp.get("name") or "").strip(),
@@ -15768,90 +15826,13 @@ def create_app() -> FastAPI:
                 "registry_auto_update": str(qp.get("registry_auto_update") or "1"),
             }
 
-            info: str | None = None
-            error: str | None = None
-
-            lookup = (qp.get("lookup") or "").strip().lower()
-            country = _normalize_contact_country(prefill.get("country"))
-
-            # CZ lookup (ARES)
-            if (lookup == "ares" or (lookup == "" and prefill["ico"] and country == "CZ")) and prefill["ico"]:
-                from fakturek.company_lookup import (
-                    CompanyLookupError,
-                    lookup_cz_company_prefill_with_cache,
-                )
-                from fakturek.settings import get_settings
-
-                settings = get_settings()
-                try:
-                    company, source = lookup_cz_company_prefill_with_cache(
-                        db,
-                        prefill["ico"],
-                        base_url=settings.ares_base_url,
-                        timeout_seconds=settings.ares_timeout_seconds,
-                        cache_ttl_days=settings.company_lookup_cache_ttl_days,
-                    )
-                    # Overwrite selected fields with authoritative registry data.
-                    if company.name:
-                        prefill["name"] = company.name
-                    prefill["street"] = company.street
-                    prefill["city"] = company.city
-                    prefill["zip"] = company.zip
-                    prefill["country"] = company.country
-                    prefill["ico"] = company.ico
-                    prefill["dic"] = company.dic
-
-                    info = "Načteno z ARES." if source == "live" else "Načteno z ARES (cache)."
-                except CompanyLookupError as exc:
-                    error = str(exc)
-
-            # SK lookup (RPO + ORSR fallback)
-            if (
-                error is None
-                and prefill["ico"]
-                and (lookup in {"rpo", "sk"} or (lookup == "" and country == "SK"))
-            ):
-                from fakturek.company_lookup import (
-                    CompanyLookupError,
-                    lookup_sk_company_prefill_with_cache,
-                )
-                from fakturek.settings import get_settings
-
-                settings = get_settings()
-                try:
-                    company, source, provider = lookup_sk_company_prefill_with_cache(
-                        db,
-                        prefill["ico"],
-                        rpo_base_url=settings.sk_rpo_base_url,
-                        rpo_timeout_seconds=settings.sk_rpo_timeout_seconds,
-                        orsr_base_url=settings.sk_orsr_base_url,
-                        orsr_timeout_seconds=settings.sk_orsr_timeout_seconds,
-                        cache_ttl_days=settings.company_lookup_cache_ttl_days,
-                    )
-
-                    if company.name:
-                        prefill["name"] = company.name
-                    prefill["street"] = company.street
-                    prefill["city"] = company.city
-                    prefill["zip"] = company.zip
-                    prefill["country"] = company.country or "SK"
-                    prefill["ico"] = company.ico
-                    prefill["dic"] = company.dic
-
-                    label = "RPO" if provider == "rpo" else "ORSR"
-                    info = (
-                        f"Načteno z {label}." if source == "live" else f"Načteno z {label} (cache)."
-                    )
-                except CompanyLookupError as exc:
-                    error = str(exc)
-
             return templates.TemplateResponse(
                 request,
                 "contacts/new.html",
                 {
                     "prefill": prefill,
-                    "error": error,
-                    "info": info,
+                    "error": None,
+                    "info": None,
                     **_contact_country_template_context(prefill.get("country")),
                 },
             )
@@ -15874,6 +15855,20 @@ def create_app() -> FastAPI:
             prefill["email"] = _normalize_contact_email_input(prefill.get("email"))
             prefill["fixed_variable_symbol"] = _normalize_variable_symbol(form.get("fixed_variable_symbol"))
             prefill["registry_auto_update"] = "1" if str(form.get("registry_auto_update") or "").strip().lower() in {"1", "true", "on", "yes"} else ""
+
+            lookup = str(form.get("lookup") or "").strip().lower()
+            if lookup in {"ares", "rpo", "sk"}:
+                info, error = _lookup_contact_prefill(db, prefill, lookup)
+                return templates.TemplateResponse(
+                    request,
+                    "contacts/new.html",
+                    {
+                        "prefill": prefill,
+                        "error": error,
+                        "info": info,
+                        **_contact_country_template_context(prefill.get("country")),
+                    },
+                )
 
             name = (form.get("name") or "").strip()
             if not name:
@@ -16013,80 +16008,14 @@ def create_app() -> FastAPI:
                 "registry_auto_update": "1" if bool(getattr(contact, "registry_auto_update", True)) else "",
             }
 
-            info: str | None = None
-            error: str | None = None
-            lookup = (qp.get("lookup") or "").strip().lower()
-            if lookup == "ares":
-                from fakturek.company_lookup import (
-                    CompanyLookupError,
-                    lookup_cz_company_prefill_with_cache,
-                )
-                from fakturek.settings import get_settings
-
-                settings = get_settings()
-                try:
-                    company, source = lookup_cz_company_prefill_with_cache(
-                        db,
-                        prefill["ico"],
-                        base_url=settings.ares_base_url,
-                        timeout_seconds=settings.ares_timeout_seconds,
-                        cache_ttl_days=settings.company_lookup_cache_ttl_days,
-                    )
-                    if company.name:
-                        prefill["name"] = company.name
-                    prefill["street"] = company.street
-                    prefill["city"] = company.city
-                    prefill["zip"] = company.zip
-                    prefill["country"] = company.country
-                    prefill["ico"] = company.ico
-                    prefill["dic"] = company.dic
-
-                    info = "Načteno z ARES." if source == "live" else "Načteno z ARES (cache)."
-                except CompanyLookupError as exc:
-                    error = str(exc)
-
-            if lookup in {"rpo", "sk"} and prefill.get("ico"):
-                from fakturek.company_lookup import (
-                    CompanyLookupError,
-                    lookup_sk_company_prefill_with_cache,
-                )
-                from fakturek.settings import get_settings
-
-                settings = get_settings()
-                try:
-                    company, source, provider = lookup_sk_company_prefill_with_cache(
-                        db,
-                        prefill["ico"],
-                        rpo_base_url=settings.sk_rpo_base_url,
-                        rpo_timeout_seconds=settings.sk_rpo_timeout_seconds,
-                        orsr_base_url=settings.sk_orsr_base_url,
-                        orsr_timeout_seconds=settings.sk_orsr_timeout_seconds,
-                        cache_ttl_days=settings.company_lookup_cache_ttl_days,
-                    )
-                    if company.name:
-                        prefill["name"] = company.name
-                    prefill["street"] = company.street
-                    prefill["city"] = company.city
-                    prefill["zip"] = company.zip
-                    prefill["country"] = company.country or "SK"
-                    prefill["ico"] = company.ico
-                    prefill["dic"] = company.dic
-
-                    label = "RPO" if provider == "rpo" else "ORSR"
-                    info = (
-                        f"Načteno z {label}." if source == "live" else f"Načteno z {label} (cache)."
-                    )
-                except CompanyLookupError as exc:
-                    error = str(exc)
-
             return templates.TemplateResponse(
                 request,
                 "contacts/edit.html",
                 {
                     "contact": contact,
                     "prefill": prefill,
-                    "error": error,
-                    "info": info,
+                    "error": None,
+                    "info": None,
                     **_contact_country_template_context(prefill.get("country")),
                 },
             )
@@ -16124,6 +16053,21 @@ def create_app() -> FastAPI:
             prefill["email"] = _normalize_contact_email_input(prefill.get("email"))
             prefill["fixed_variable_symbol"] = _normalize_variable_symbol(form.get("fixed_variable_symbol"))
             prefill["registry_auto_update"] = "1" if str(form.get("registry_auto_update") or "").strip().lower() in {"1", "true", "on", "yes"} else ""
+
+            lookup = str(form.get("lookup") or "").strip().lower()
+            if lookup in {"ares", "rpo", "sk"}:
+                info, error = _lookup_contact_prefill(db, prefill, lookup)
+                return templates.TemplateResponse(
+                    request,
+                    "contacts/edit.html",
+                    {
+                        "contact": contact,
+                        "prefill": prefill,
+                        "error": error,
+                        "info": info,
+                        **_contact_country_template_context(prefill.get("country")),
+                    },
+                )
 
             if not name:
                 return templates.TemplateResponse(

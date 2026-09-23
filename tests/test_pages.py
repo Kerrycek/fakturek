@@ -7,6 +7,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 import fakturek.db as db_module
 from fakturek.db import Base
+from fakturek.company_lookup import CompanyLookupError, CompanyPrefill
 from fakturek.main import create_app
 from fakturek.models import Contact, Invoice, InvoiceSeries, Subject
 from fakturek.settings import get_settings
@@ -162,6 +163,189 @@ def test_contacts_new_page_ok():
     assert res.status_code == 200
     assert "kontakt" in res.text.lower()
     assert 'name="csrf_token"' in res.text
+
+
+def test_contact_registry_lookup_posts_without_saving_and_keeps_modern_forms(monkeypatch):
+    calls: list[str] = []
+
+    def fake_lookup(_db, ico, **_kwargs):
+        calls.append(str(ico))
+        return (
+            CompanyPrefill(
+                name="Registry Client s.r.o.",
+                street="Registry 1",
+                city="Praha",
+                zip="11000",
+                country="CZ",
+                ico="00006947",
+                dic="CZ00006947",
+            ),
+            "cache",
+        )
+
+    monkeypatch.setattr(
+        "fakturek.company_lookup.lookup_cz_company_prefill_with_cache",
+        fake_lookup,
+    )
+    client = TestClient(create_app(), base_url="https://app.example.test")
+
+    passive_new = client.get(
+        "/contacts/new?lookup=ares&ico=6947&name=Query%20Prefill"
+    )
+    passive_edit = client.get(
+        "/contacts/1/edit?lookup=ares&ico=6947&name=Query%20Prefill"
+    )
+    assert passive_new.status_code == 200
+    assert passive_edit.status_code == 200
+    assert "Query Prefill" in passive_new.text
+    assert "Query Prefill" in passive_edit.text
+    assert calls == []
+
+    created = client.post(
+        "/contacts/new",
+        data={
+            "lookup": "ares",
+            "name": "Manual value",
+            "email": "manual@example.test",
+            "phone": "",
+            "street": "",
+            "city": "",
+            "zip": "",
+            "country": "CZ",
+            "ico": "6947",
+            "dic": "",
+            "fixed_variable_symbol": "",
+            "registry_auto_update": "1",
+        },
+    )
+
+    assert created.status_code == 200
+    assert created.request.url == "https://app.example.test/contacts/new"
+    assert "Registry Client s.r.o." in created.text
+    assert "Načteno z ARES (cache)." in created.text
+    assert 'class="stack-lg compact-form-page contact-new-page"' in created.text
+    assert 'data-contact-registry-form' in created.text
+    assert 'data-contact-registry-ico' in created.text
+    assert 'formmethod="get"' not in created.text
+
+    edited = client.post(
+        "/contacts/1/edit",
+        data={
+            "lookup": "ares",
+            "name": "Smoke Contact",
+            "email": "contact@example.test",
+            "phone": "",
+            "street": "",
+            "city": "",
+            "zip": "",
+            "country": "CZ",
+            "ico": "6947",
+            "dic": "",
+            "fixed_variable_symbol": "",
+            "registry_auto_update": "1",
+        },
+    )
+
+    assert edited.status_code == 200
+    assert edited.request.url == "https://app.example.test/contacts/1/edit"
+    assert "Registry Client s.r.o." in edited.text
+    assert 'class="stack-lg compact-form-page contact-edit-page"' in edited.text
+    assert 'data-contact-registry-form' in edited.text
+    assert 'formmethod="get"' not in edited.text
+    assert calls == ["6947", "6947"]
+
+    from fakturek.db import get_sessionmaker
+
+    with get_sessionmaker()() as db:
+        contacts = db.query(Contact).order_by(Contact.id).all()
+        assert len(contacts) == 1
+        assert contacts[0].name == "Smoke Contact"
+
+
+def test_contact_edit_and_registry_lookup_are_translated_to_english(monkeypatch):
+    def fake_lookup(_db, _ico, **_kwargs):
+        return (
+            CompanyPrefill(
+                name="Registry Client s.r.o.",
+                street="Registry 1",
+                city="Prague",
+                zip="11000",
+                country="CZ",
+                ico="00006947",
+                dic="CZ00006947",
+            ),
+            "cache",
+        )
+
+    monkeypatch.setattr(
+        "fakturek.company_lookup.lookup_cz_company_prefill_with_cache",
+        fake_lookup,
+    )
+    client = TestClient(create_app(), base_url="https://app.example.test")
+    switched = client.post(
+        "/settings/language",
+        data={"ui_language": "en", "next": "/contacts/1/edit"},
+        follow_redirects=False,
+    )
+    assert switched.status_code == 303
+
+    edited = client.post(
+        "/contacts/1/edit",
+        data={
+            "lookup": "ares",
+            "name": "Smoke Contact",
+            "email": "contact@example.test",
+            "phone": "",
+            "street": "",
+            "city": "",
+            "zip": "",
+            "country": "CZ",
+            "ico": "6947",
+            "dic": "",
+            "fixed_variable_symbol": "",
+            "registry_auto_update": "1",
+        },
+    )
+
+    assert edited.status_code == 200
+    for expected in (
+        "Edit contact",
+        "Look up the details in a registry or edit them manually.",
+        "Back to contact",
+        "Look up contact by company ID",
+        "Loaded from ARES (cache).",
+        "Delete contact",
+    ):
+        assert expected in edited.text
+    for untranslated in (
+        "Údaje můžeš",
+        "Zpět na detail",
+        "Načíst kontakt podle IČO",
+        "Načteno z ARES",
+        "Smazání kontaktu",
+        ">Smazat kontakt<",
+    ):
+        assert untranslated not in edited.text
+
+    def invalid_lookup(_db, _ico, **_kwargs):
+        raise CompanyLookupError("Neplatné IČO.")
+
+    monkeypatch.setattr(
+        "fakturek.company_lookup.lookup_cz_company_prefill_with_cache",
+        invalid_lookup,
+    )
+    invalid = client.post(
+        "/contacts/1/edit",
+        data={
+            "lookup": "ares",
+            "name": "Smoke Contact",
+            "country": "CZ",
+            "ico": "invalid",
+        },
+    )
+    assert invalid.status_code == 200
+    assert "Invalid company ID." in invalid.text
+    assert "Neplatné IČO" not in invalid.text
 
 
 def test_invoices_new_page_ok():
