@@ -1035,8 +1035,13 @@ class ImportRun(TimestampMixin, Base):
     # Relative path under IMPORT_STORAGE_DIR. Empty until the file is stored.
     file_path: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
     file_sha256: Mapped[str] = mapped_column(String(64), nullable=False, default="", index=True)
+    upload_dedupe_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
     file_size_bytes: Mapped[int] = mapped_column(BIGINT_SQLITE, nullable=False, default=0)
     mime_type: Mapped[str] = mapped_column(String(100), nullable=False, default="")
+
+    __table_args__ = (
+        sa.Index("uq_import_run_sub_src_udk", "subject_id", "source", "upload_dedupe_key", unique=True),
+    )
 
 
 class ImportMap(Base):
