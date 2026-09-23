@@ -14632,6 +14632,29 @@ def create_app() -> FastAPI:
             "accept": ".pdf,.zip,application/pdf,application/zip",
         },
     ]
+    IMPORT_SOURCE_VALUES: frozenset[str] = frozenset(
+        str(option["value"]).strip().lower() for option in IMPORT_SOURCE_OPTIONS
+    )
+    INVALID_IMPORT_SOURCE_MESSAGE = (
+        "Neplatný zdroj importu. Vyber jeden z nabízených typů."
+    )
+    UNSUPPORTED_IMPORT_RUN_SOURCE_MESSAGE = (
+        "Zdroj tohoto importu není podporovaný. Běh zůstává dostupný jen pro audit; "
+        "nelze ho upravit ani spustit."
+    )
+
+    def _normalize_import_source(value: object | None) -> str:
+        return str(value or "").strip().lower()
+
+    def _is_supported_import_source(value: object | None) -> bool:
+        return _normalize_import_source(value) in IMPORT_SOURCE_VALUES
+
+    def _is_canonical_import_source(value: object | None) -> bool:
+        raw_value = str(value or "")
+        return (
+            raw_value == _normalize_import_source(raw_value)
+            and raw_value in IMPORT_SOURCE_VALUES
+        )
 
     def _import_source_options() -> list[dict[str, str]]:
         configured_max_upload_mb = max(
@@ -14681,7 +14704,7 @@ def create_app() -> FastAPI:
     ]
 
     def _import_source_label(value: str | None) -> str:
-        normalized = str(value or "").strip().lower()
+        normalized = _normalize_import_source(value)
         for option in IMPORT_SOURCE_OPTIONS:
             if str(option.get("value") or "").strip().lower() == normalized:
                 return str(option.get("label") or value or "")
@@ -14780,8 +14803,40 @@ def create_app() -> FastAPI:
         async def imports_upload(request: Request, db: Session = Depends(get_db)):
             sid = _current_subject_id()
             form = await _request_form_once(request)
-            source = (form.get("source") or "fakturoid").strip().lower() or "fakturoid"
+            source = _normalize_import_source(form.get("source")) or "fakturoid"
             upload = form.get("file")
+
+            if not _is_supported_import_source(source):
+                return templates.TemplateResponse(
+                    request,
+                    "imports/list.html",
+                    {
+                        "db_enabled": True,
+                        "can_export": _current_request_can_export_subject(
+                            db,
+                            request=request,
+                            subject_id=int(sid),
+                        ),
+                        "notice": None,
+                        "error": INVALID_IMPORT_SOURCE_MESSAGE,
+                        "runs": [],
+                        "prefill": {"source": "fakturoid"},
+                        "export_prefill": _default_invoice_export_prefill(),
+                        "export_contact_options": [],
+                        "export_format_options": INVOICE_EXPORT_FORMAT_OPTIONS,
+                        "invoice_status_options": INVOICE_EXPORT_STATUS_OPTIONS,
+                        "invoice_document_type_options": INVOICE_DOCUMENT_TYPE_OPTIONS,
+                        "import_source_options": _import_source_options(),
+                        "max_upload_mb": int(
+                            getattr(settings, "import_max_upload_mb", 25) or 25
+                        ),
+                        "import_storage_dir": str(
+                            getattr(settings, "import_storage_dir", "var/imports")
+                            or "var/imports"
+                        ),
+                    },
+                    status_code=400,
+                )
 
             if upload is None or not getattr(upload, "filename", None):
                 return templates.TemplateResponse(
@@ -15062,6 +15117,11 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=404, detail="Import run not found")
 
             await _verify_csrf(request)
+            if not _is_canonical_import_source(getattr(run, "source", None)):
+                raise HTTPException(
+                    status_code=409,
+                    detail=_ui_text(UNSUPPORTED_IMPORT_RUN_SOURCE_MESSAGE),
+                )
             form = await _request_form_once(request)
             mapping: dict[str, str] = {}
             for field_name, _label in IMPORT_CONTACT_MAPPING_FIELDS:
@@ -15107,21 +15167,18 @@ def create_app() -> FastAPI:
             if run is None:
                 raise HTTPException(status_code=404, detail="Import run not found")
 
-            is_native_backup = (
-                str(getattr(run, "source", "") or "").strip().lower() == NATIVE_BACKUP_SOURCE
-            )
-            is_native_backup_v2 = (
-                str(getattr(run, "source", "") or "").strip().lower() == NATIVE_BACKUP_V2_SOURCE
-            )
-            is_native_backup_v3 = (
-                str(getattr(run, "source", "") or "").strip().lower() == NATIVE_BACKUP_V3_SOURCE
-            )
-            is_catalog_csv = (
-                str(getattr(run, "source", "") or "").strip().lower() == CATALOG_CSV_SOURCE
-            )
-            is_contacts_csv = (
-                str(getattr(run, "source", "") or "").strip().lower() == CONTACTS_CSV_SOURCE
-            )
+            source_value = _normalize_import_source(getattr(run, "source", None))
+            if not _is_canonical_import_source(getattr(run, "source", None)):
+                raise HTTPException(
+                    status_code=409,
+                    detail=_ui_text(UNSUPPORTED_IMPORT_RUN_SOURCE_MESSAGE),
+                )
+
+            is_native_backup = source_value == NATIVE_BACKUP_SOURCE
+            is_native_backup_v2 = source_value == NATIVE_BACKUP_V2_SOURCE
+            is_native_backup_v3 = source_value == NATIVE_BACKUP_V3_SOURCE
+            is_catalog_csv = source_value == CATALOG_CSV_SOURCE
+            is_contacts_csv = source_value == CONTACTS_CSV_SOURCE
             native_plan = None
             native_v2_plan = None
             native_v3_plan = None
@@ -15421,14 +15478,20 @@ def create_app() -> FastAPI:
             preview = None
             preview_error = None
             config = _import_run_config(run)
-            source_value = str(getattr(run, "source", "") or "").strip().lower()
+            source_value = _normalize_import_source(getattr(run, "source", None))
+            source_is_canonical = _is_canonical_import_source(
+                getattr(run, "source", None)
+            )
             try:
                 if getattr(run, "summary_json", None):
                     summary = json.loads(str(run.summary_json))
             except Exception:
                 summary = None
 
-            if str(getattr(run, "status", "") or "") in {"uploaded", "error"}:
+            if (
+                source_is_canonical
+                and str(getattr(run, "status", "") or "") in {"uploaded", "error"}
+            ):
                 try:
                     if source_value == NATIVE_BACKUP_SOURCE:
                         max_upload_bytes = max(1, int(getattr(settings, "import_max_upload_mb", 25) or 25)) * 1024 * 1024
@@ -15502,7 +15565,8 @@ def create_app() -> FastAPI:
             }
             strict_preview_failed = preview_error is not None and strict_source
             can_process = (
-                str(getattr(run, "status", "") or "") in {"uploaded", "error"}
+                source_is_canonical
+                and str(getattr(run, "status", "") or "") in {"uploaded", "error"}
                 and not strict_preview_failed
             )
 
@@ -15521,10 +15585,14 @@ def create_app() -> FastAPI:
                     "config": config,
                     "can_process": can_process,
                     "process_blocked_reason": (
-                        "Import nelze spustit, dokud soubor neprojde kontrolou náhledu. "
-                        "Nahraj opravený soubor znovu."
-                        if strict_preview_failed
-                        else None
+                        UNSUPPORTED_IMPORT_RUN_SOURCE_MESSAGE
+                        if not source_is_canonical
+                        else (
+                            "Import nelze spustit, dokud soubor neprojde kontrolou náhledu. "
+                            "Nahraj opravený soubor znovu."
+                            if strict_preview_failed
+                            else None
+                        )
                     ),
                     "contact_mapping_fields": IMPORT_CONTACT_MAPPING_FIELDS,
                     "contact_conflict_options": IMPORT_CONTACT_CONFLICT_OPTIONS,

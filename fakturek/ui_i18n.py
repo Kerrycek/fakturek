@@ -723,6 +723,16 @@ UI_TRANSLATIONS_EN.update(
         "Co se stane při importu kontaktů": "What will happen when contacts are imported",
         "CSV prošlo úplnou kontrolou. Existující kontakt se znovu použije jen při přesné shodě a nikdy se nepřepíše.": "The CSV passed complete validation. An existing contact is reused only on an exact match and is never overwritten.",
         "Kontakty CSV jsou neplatné nebo nedostupné.": "Contacts CSV is invalid or unavailable.",
+        "Neplatný zdroj importu. Vyber jeden z nabízených typů.": (
+            "Invalid import source. Choose one of the available types."
+        ),
+        (
+            "Zdroj tohoto importu není podporovaný. Běh zůstává dostupný jen pro audit; "
+            "nelze ho upravit ani spustit."
+        ): (
+            "This import source is not supported. The run remains available for audit "
+            "only; it cannot be changed or started."
+        ),
         "Nové kontakty": "New contacts",
         "Znovupoužité kontakty": "Reused contacts",
         "Mapované kontakty se zachovanými úpravami": "Mapped contacts with preserved edits",
