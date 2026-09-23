@@ -180,6 +180,7 @@ def _safe_screenshot_name(name: str) -> str:
 
 
 def test_core_app_flow_in_browser(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    monkeypatch.setenv("IMPORT_MAX_UPLOAD_MB", "100")
     app, SessionLocal = _setup_app(monkeypatch, tmp_path)
     base_url, server = _start_server(app)
 
@@ -288,7 +289,19 @@ def test_core_app_flow_in_browser(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
                     page.get_by_role("button", name="Statistiky").click()
                     page.get_by_text("Posledních 6 měsíců").wait_for()
                     page.get_by_text("Přihlášení a účty").wait_for()
-            screenshot("06-settings-or-admin")
+
+            page.goto(f"{base_url}/imports#import")
+            upload_limit = page.locator("[data-import-max-upload-mb]")
+            assert upload_limit.inner_text() == "100"
+            contacts_csv_source = page.locator(
+                'input[name="source"][value="fakturek_contacts_csv_v1"]',
+            )
+            assert contacts_csv_source.get_attribute("data-max-upload-mb") == "25"
+            contacts_csv_source.check()
+            assert upload_limit.inner_text() == "25"
+            page.locator('input[name="source"][value="fakturoid"]').check()
+            assert upload_limit.inner_text() == "100"
+            screenshot("06-imports-upload-limit")
 
             mobile = browser.new_context(viewport={"width": 390, "height": 844})
             mobile_page = mobile.new_page()

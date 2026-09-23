@@ -273,16 +273,21 @@
             {{ csrf_input(request)|safe }}
 
             {% set selected_source = (prefill.source if prefill and prefill.source else 'fakturoid') %}
+            {% set selected_upload_limit = namespace(mb=max_upload_mb) %}
             <div class="stack-sm">
               <label>Co chceš nahrát</label>
               <div class="import-source-list">
                 {% for source in (import_source_options or []) %}
+                  {% if selected_source == source.value %}
+                    {% set selected_upload_limit.mb = source.max_upload_mb %}
+                  {% endif %}
                   <label class="import-source-option">
                     <input
                       type="radio"
                       name="source"
                       value="{{ source.value }}"
                       data-accept="{{ source.accept }}"
+                      data-max-upload-mb="{{ source.max_upload_mb }}"
                       {% if selected_source == source.value %}checked{% endif %}
                     />
                     <span>
@@ -303,7 +308,7 @@
               <label for="file">Soubor</label>
               <input id="file" type="file" name="file" required accept=".xml,.isdoc,.csv,.zip,.pdf,application/xml,text/csv,application/zip,application/vnd.fakturek.native-backup+zip,application/vnd.fakturek.native-backup-v2+zip,application/vnd.fakturek.native-backup-v3+zip,application/pdf" />
               {% if max_upload_mb %}
-                <div class="muted"><small>XML, ISDOC, PDF, CSV nebo ZIP. Max {{ max_upload_mb }} MB.</small></div>
+                <div class="muted"><small>XML, ISDOC, PDF, CSV nebo ZIP. Max <span data-import-max-upload-mb>{{ selected_upload_limit.mb }}</span> MB.</small></div>
               {% else %}
                 <div class="muted"><small>XML, ISDOC, PDF, CSV nebo ZIP.</small></div>
               {% endif %}
@@ -410,14 +415,18 @@
             const fileInput = document.getElementById('file');
             if (!fileInput) return;
             const radios = Array.from(document.querySelectorAll('input[name="source"][data-accept]'));
-            const syncAccept = () => {
+            const maxUploadLabel = document.querySelector('[data-import-max-upload-mb]');
+            const syncSourceConstraints = () => {
               const active = radios.find((radio) => radio.checked);
               if (active && active.dataset.accept) {
                 fileInput.setAttribute('accept', active.dataset.accept);
               }
+              if (active && active.dataset.maxUploadMb && maxUploadLabel) {
+                maxUploadLabel.textContent = active.dataset.maxUploadMb;
+              }
             };
-            radios.forEach((radio) => radio.addEventListener('change', syncAccept));
-            syncAccept();
+            radios.forEach((radio) => radio.addEventListener('change', syncSourceConstraints));
+            syncSourceConstraints();
           })();
 
           (() => {

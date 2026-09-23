@@ -14634,7 +14634,26 @@ def create_app() -> FastAPI:
     ]
 
     def _import_source_options() -> list[dict[str, str]]:
-        return [dict(option) for option in IMPORT_SOURCE_OPTIONS]
+        configured_max_upload_mb = max(
+            1,
+            int(getattr(settings, "import_max_upload_mb", 25) or 25),
+        )
+        contacts_max_upload_mb = max(
+            1,
+            CONTACTS_CSV_MAX_UPLOAD_BYTES // (1024 * 1024),
+        )
+        options: list[dict[str, str]] = []
+        for option in IMPORT_SOURCE_OPTIONS:
+            rendered = dict(option)
+            effective_max_upload_mb = configured_max_upload_mb
+            if str(option.get("value") or "") == CONTACTS_CSV_SOURCE:
+                effective_max_upload_mb = min(
+                    effective_max_upload_mb,
+                    contacts_max_upload_mb,
+                )
+            rendered["max_upload_mb"] = str(effective_max_upload_mb)
+            options.append(rendered)
+        return options
 
     IMPORT_CONTACT_MAPPING_FIELDS: list[tuple[str, str]] = [
         ("external_id", "Externí ID"),

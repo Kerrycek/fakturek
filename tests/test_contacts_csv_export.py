@@ -136,3 +136,23 @@ def test_contacts_csv_export_hard_clamps_large_config_to_25_mib(monkeypatch, tmp
     assert response.status_code == 413
     assert observed["max_upload_bytes"] == 25 * 1024 * 1024
     _reset()
+
+
+def test_contacts_csv_import_ui_shows_the_effective_25_mib_limit(
+    monkeypatch, tmp_path,
+):
+    from fakturek.contacts_csv import SOURCE
+
+    monkeypatch.setenv("IMPORT_MAX_UPLOAD_MB", "100")
+    client = _setup(monkeypatch, tmp_path)
+
+    page = client.get("/imports")
+    assert page.status_code == 200
+    assert "data-max-upload-mb=\"25\"" in page.text
+    assert "<span data-import-max-upload-mb>100</span>" in page.text
+    assert "active.dataset.maxUploadMb" in page.text
+
+    contacts_selected = client.post("/imports", data={"source": SOURCE})
+    assert contacts_selected.status_code == 400
+    assert "<span data-import-max-upload-mb>25</span>" in contacts_selected.text
+    _reset()
