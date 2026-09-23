@@ -163,6 +163,15 @@ from fakturek.catalog_csv import (
     preview_catalog_csv_import,
     process_catalog_csv_import,
 )
+from fakturek.contacts_csv import (
+    MAX_ROWS as CONTACTS_CSV_MAX_ROWS,
+    MAX_UPLOAD_BYTES as CONTACTS_CSV_MAX_UPLOAD_BYTES,
+    SOURCE as CONTACTS_CSV_SOURCE,
+    build_contacts_csv_bytes,
+    build_contacts_csv_import_plan,
+    preview_contacts_csv_import,
+    process_contacts_csv_import,
+)
 from fakturek.isdoc import build_isdoc_bytes
 from fakturek.public_links import (
     PUBLIC_USERNAME_RE,
@@ -477,6 +486,7 @@ def create_app() -> FastAPI:
             "/exports/data.zip",
             "/exports/invoices",
             "/exports/catalog-items.csv",
+            "/exports/contacts.csv",
             "/exports/native-backup.zip",
             "/exports/native-backup-v2.zip",
             "/exports/native-backup-v3.zip",
@@ -13990,6 +14000,56 @@ def create_app() -> FastAPI:
         return out.getvalue()
 
     if _db_enabled:
+        @app.get("/exports/contacts.csv")
+        def export_contacts_csv_v1(request: Request, db: Session = Depends(get_db)):
+            """Download the strict, tenant-scoped Fakturek contacts CSV v1 file."""
+
+            sid = _current_subject_id()
+            max_export_bytes = (
+                max(1, int(getattr(settings, "import_max_upload_mb", 25) or 25)) * 1024 * 1024
+            )
+            max_export_bytes = min(max_export_bytes, CONTACTS_CSV_MAX_UPLOAD_BYTES)
+            try:
+                contacts = db.scalars(
+                    select(Contact)
+                    .where(Contact.subject_id == int(sid))
+                    .order_by(Contact.id.asc())
+                    .limit(CONTACTS_CSV_MAX_ROWS + 1)
+                ).all()
+                if len(contacts) > CONTACTS_CSV_MAX_ROWS:
+                    return HTMLResponse(
+                        content="<h1>Kontakty CSV nelze vytvořit</h1><p>Export překračuje povolený počet řádků.</p>",
+                        status_code=413,
+                    )
+                payload = build_contacts_csv_bytes(
+                    contacts=list(contacts),
+                    max_rows=CONTACTS_CSV_MAX_ROWS,
+                    max_upload_bytes=max_export_bytes,
+                )
+            except ValueError as exc:
+                if str(exc) == "contacts CSV is too large":
+                    return HTMLResponse(
+                        content="<h1>Kontakty CSV nelze vytvořit</h1><p>Export překračuje povolenou velikost souboru.</p>",
+                        status_code=413,
+                    )
+                # Do not expose stored contact values or internal identifiers.
+                return HTMLResponse(
+                    content="<h1>Kontakty CSV nelze vytvořit</h1><p>Data kontaktů nejsou platná pro CSV v1.</p>",
+                    status_code=422,
+                )
+            except SQLAlchemyError as exc:  # type: ignore[misc]
+                return _render_db_disabled(
+                    request,
+                    title="Kontakty CSV",
+                    db_error=str(exc),
+                    status_code=500,
+                )
+            return Response(
+                content=payload,
+                media_type="text/csv; charset=utf-8",
+                headers={"Content-Disposition": _attachment_disposition("fakturek-contacts-v1.csv")},
+            )
+
         @app.get("/exports/catalog-items.csv")
         def export_catalog_csv(request: Request, db: Session = Depends(get_db)):
             """Download the strict, tenant-scoped catalog CSV v1 file."""
@@ -14463,6 +14523,10 @@ def create_app() -> FastAPI:
 
             return _render_export_error("Vybraný formát exportu zatím neumím zpracovat.")
     else:
+        @app.get("/exports/contacts.csv")
+        def export_contacts_csv_v1_disabled(request: Request):
+            return _render_db_disabled(request, title="Kontakty CSV")
+
         @app.get("/exports/catalog-items.csv")
         def export_catalog_csv_disabled(request: Request):
             return _render_db_disabled(request, title="Katalog CSV")
@@ -14492,6 +14556,12 @@ def create_app() -> FastAPI:
     # ------------------------------------------------------------------
 
     IMPORT_SOURCE_OPTIONS: list[dict[str, str]] = [
+        {
+            "value": CONTACTS_CSV_SOURCE,
+            "label": "Fakturek kontakty CSV v1",
+            "description": "Bezpečný přenos kontaktů mezi Fakturky do 25 MB. Přesné shody znovu použije a existující kontakty nikdy nepřepíše.",
+            "accept": ".csv,text/csv",
+        },
         {
             "value": CATALOG_CSV_SOURCE,
             "label": "Fakturek katalog CSV v1",
@@ -14719,6 +14789,8 @@ def create_app() -> FastAPI:
 
             max_mb = int(getattr(settings, "import_max_upload_mb", 25) or 25)
             max_bytes = max(1, max_mb) * 1024 * 1024
+            if source == CONTACTS_CSV_SOURCE:
+                max_bytes = min(max_bytes, CONTACTS_CSV_MAX_UPLOAD_BYTES)
 
             try:
                 tmp_path, sha256_hex, size_bytes = await _save_upload_to_temp(upload, max_bytes=max_bytes)
@@ -14767,11 +14839,13 @@ def create_app() -> FastAPI:
                     status_code=400,
                 )
 
+            is_contacts_csv_upload = str(source) == CONTACTS_CSV_SOURCE
             is_catalog_csv_upload = str(source) == CATALOG_CSV_SOURCE
             is_native_backup_v2_upload = str(source) == NATIVE_BACKUP_V2_SOURCE
             is_native_backup_v3_upload = str(source) == NATIVE_BACKUP_V3_SOURCE
             is_idempotent_upload = (
-                is_catalog_csv_upload
+                is_contacts_csv_upload
+                or is_catalog_csv_upload
                 or is_native_backup_v2_upload
                 or is_native_backup_v3_upload
             )
@@ -14803,11 +14877,11 @@ def create_app() -> FastAPI:
 
             if (
                 existing is not None
-                and is_native_backup_v3_upload
+                and (is_native_backup_v3_upload or is_contacts_csv_upload)
                 and str(getattr(existing, "status", "") or "") == "finished"
             ):
                 # A completed restore is historical audit data, not a permanent
-                # prohibition on restoring the same saved backup after master
+                # prohibition on restoring the same portable file after master
                 # data is later deleted. Release only its upload claim; active
                 # runs with the same bytes remain deduplicated.
                 try:
@@ -15026,11 +15100,21 @@ def create_app() -> FastAPI:
             is_catalog_csv = (
                 str(getattr(run, "source", "") or "").strip().lower() == CATALOG_CSV_SOURCE
             )
+            is_contacts_csv = (
+                str(getattr(run, "source", "") or "").strip().lower() == CONTACTS_CSV_SOURCE
+            )
             native_plan = None
             native_v2_plan = None
             native_v3_plan = None
             catalog_csv_plan = None
-            if is_native_backup or is_native_backup_v2 or is_native_backup_v3 or is_catalog_csv:
+            contacts_csv_plan = None
+            if (
+                is_native_backup
+                or is_native_backup_v2
+                or is_native_backup_v3
+                or is_catalog_csv
+                or is_contacts_csv
+            ):
                 # Validate every native member before changing even the run state.
                 # Apply this exact immutable plan after the atomic run claim so
                 # preview and processing cannot disagree about earlier rows.
@@ -15086,7 +15170,7 @@ def create_app() -> FastAPI:
                             max_upload_bytes=max_upload_bytes,
                             plan=native_v3_plan,
                         )
-                    else:
+                    elif is_catalog_csv:
                         catalog_csv_plan = build_catalog_csv_import_plan(
                             db,
                             run=run,
@@ -15101,6 +15185,22 @@ def create_app() -> FastAPI:
                             import_storage_root=import_storage_root,
                             max_upload_bytes=max_upload_bytes,
                             plan=catalog_csv_plan,
+                        )
+                    else:
+                        contacts_csv_plan = build_contacts_csv_import_plan(
+                            db,
+                            run=run,
+                            subject_id=int(sid),
+                            import_storage_root=import_storage_root,
+                            max_upload_bytes=max_upload_bytes,
+                        )
+                        preview_contacts_csv_import(
+                            db,
+                            run=run,
+                            subject_id=int(sid),
+                            import_storage_root=import_storage_root,
+                            max_upload_bytes=max_upload_bytes,
+                            plan=contacts_csv_plan,
                         )
                 except Exception as exc:
                     try:
@@ -15119,11 +15219,17 @@ def create_app() -> FastAPI:
                                         else "native_backup_v2"
                                         if is_native_backup_v2
                                         else "catalog_csv_v1"
+                                        if is_catalog_csv
+                                        else "contacts_csv_v1"
                                     )
                                 ),
                                 "error": str(exc)
                                 if is_native_backup or is_native_backup_v2 or is_native_backup_v3
-                                else "Catalog CSV is invalid or unavailable.",
+                                else (
+                                    "Catalog CSV is invalid or unavailable."
+                                    if is_catalog_csv
+                                    else "Kontakty CSV jsou neplatné nebo nedostupné."
+                                ),
                             }
                         )
                         db.add(run)
@@ -15191,6 +15297,15 @@ def create_app() -> FastAPI:
                         max_upload_bytes=max_upload_bytes,
                         plan=catalog_csv_plan,
                     )
+                elif is_contacts_csv:
+                    summary = process_contacts_csv_import(
+                        db,
+                        run=run,
+                        subject_id=int(sid),
+                        import_storage_root=import_storage_root,
+                        max_upload_bytes=max_upload_bytes,
+                        plan=contacts_csv_plan,
+                    )
                 else:
                     from fakturek.fakturoid_import import process_import_run
 
@@ -15230,10 +15345,16 @@ def create_app() -> FastAPI:
                                     if is_native_backup_v3
                                     else "native_backup_v2"
                                     if is_native_backup_v2
-                                    else ("catalog_csv_v1" if is_catalog_csv else 25)
+                                    else "catalog_csv_v1"
+                                    if is_catalog_csv
+                                    else "contacts_csv_v1"
+                                    if is_contacts_csv
+                                    else 25
                                 ),
                                 "error": "Catalog CSV processing failed."
                                 if is_catalog_csv
+                                else "Contacts CSV processing failed."
+                                if is_contacts_csv
                                 else str(exc),
                             }
                         )
@@ -15326,6 +15447,15 @@ def create_app() -> FastAPI:
                             import_storage_root=import_storage_root,
                             max_upload_bytes=max_upload_bytes,
                         )
+                    elif source_value == CONTACTS_CSV_SOURCE:
+                        max_upload_bytes = max(1, int(getattr(settings, "import_max_upload_mb", 25) or 25)) * 1024 * 1024
+                        preview = preview_contacts_csv_import(
+                            db,
+                            run=run,
+                            subject_id=int(sid),
+                            import_storage_root=import_storage_root,
+                            max_upload_bytes=max_upload_bytes,
+                        )
                     else:
                         from fakturek.fakturoid_import import preview_import_run
 
@@ -15339,6 +15469,8 @@ def create_app() -> FastAPI:
                     preview_error = (
                         "Catalog CSV is invalid or unavailable."
                         if source_value == CATALOG_CSV_SOURCE
+                        else "Kontakty CSV jsou neplatné nebo nedostupné."
+                        if source_value == CONTACTS_CSV_SOURCE
                         else str(exc)
                     )
 
@@ -15347,6 +15479,7 @@ def create_app() -> FastAPI:
                 NATIVE_BACKUP_V2_SOURCE,
                 NATIVE_BACKUP_V3_SOURCE,
                 CATALOG_CSV_SOURCE,
+                CONTACTS_CSV_SOURCE,
             }
             strict_preview_failed = preview_error is not None and strict_source
             can_process = (

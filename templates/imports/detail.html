@@ -63,7 +63,38 @@
     {% endif %}
 
     {% if preview %}
-      {% if preview.catalog_csv %}
+      {% if preview.contacts_csv %}
+        <div class="card stack-md">
+          <div class="section-heading">
+            <p class="page-kicker">Fakturek kontakty CSV v1</p>
+            <h2>Co se stane při importu kontaktů</h2>
+          </div>
+          <p class="muted"><small>{{ preview.ready_note }}</small></p>
+          <div class="stats-grid">
+            <article class="stat-card"><span class="stat-label">Řádky</span><strong class="stat-value">{{ preview.contacts.parsed }}</strong></article>
+            <article class="stat-card"><span class="stat-label">Nové kontakty</span><strong class="stat-value">{{ preview.contacts.will_create }}</strong></article>
+            <article class="stat-card"><span class="stat-label">Znovupoužité kontakty</span><strong class="stat-value">{{ preview.contacts.will_reuse }}</strong></article>
+            <article class="stat-card"><span class="stat-label">Mapované kontakty se zachovanými úpravami</span><strong class="stat-value">{{ preview.contacts.will_preserve_mapped }}</strong></article>
+            <article class="stat-card"><span class="stat-label">Duplicitní řádky</span><strong class="stat-value">{{ preview.contacts.duplicate_rows }}</strong></article>
+            <article class="stat-card"><span class="stat-label">Osiřelá mapování k opravě</span><strong class="stat-value">{{ preview.contacts.will_repair_maps }}</strong></article>
+          </div>
+          <p><strong>Existující kontakty se nikdy nepřepisují.</strong> Přesná shoda se znovu použije. Kontakt dříve importovaný z tohoto řádku se po místní úpravě zachová beze změny a nevytvoří se jeho duplikát. Stejný název bez mapování a s jinými údaji vytvoří nový kontakt.</p>
+          <p class="muted"><small>Náhled je nezávazný: soubor i cílové kontakty se při spuštění znovu ověří. Zastaralý náhled se bezpečně odmítne bez částečného zápisu.</small></p>
+          {% if preview.sample_rows %}
+            <div class="stack-sm">
+              <strong>Prvních pět řádků</strong>
+              <div class="table-wrap"><table class="table">
+                <thead><tr><th>Název</th><th>E-mail</th><th>Telefon</th><th>IČO</th><th>Pevný VS</th></tr></thead>
+                <tbody>
+                  {% for row in preview.sample_rows %}
+                    <tr><td>{{ row.name }}</td><td>{{ row.email or '—' }}</td><td>{{ row.phone or '—' }}</td><td>{{ row.ico or '—' }}</td><td>{{ row.fixed_variable_symbol or '—' }}</td></tr>
+                  {% endfor %}
+                </tbody>
+              </table></div>
+            </div>
+          {% endif %}
+        </div>
+      {% elif preview.catalog_csv %}
         <div class="card stack-md">
           <div class="section-heading">
             <p class="page-kicker">Fakturek katalog CSV v1</p>
