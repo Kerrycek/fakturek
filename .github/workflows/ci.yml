@@ -27,6 +27,8 @@ jobs:
 
       - name: Install dependencies
         run: |
+          sudo apt-get update
+          sudo apt-get install -y poppler-utils
           python -m pip install --require-hashes -r requirements.lock
           python -m pip install --require-hashes -r requirements-dev.lock
           python -m playwright install --with-deps chromium

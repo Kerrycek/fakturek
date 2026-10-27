@@ -22,7 +22,7 @@ pytestmark = pytest.mark.playwright
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _render_invoice_pdf_html(*, invoice_style: str = "modern") -> str:
+def _render_invoice_pdf_html(*, invoice_style: str = "modern", public_mode: bool = False) -> str:
     env = Environment(
         loader=FileSystemLoader(str(PROJECT_ROOT / "templates")),
         autoescape=select_autoescape(["html", "xml"]),
@@ -84,7 +84,7 @@ def _render_invoice_pdf_html(*, invoice_style: str = "modern") -> str:
     return env.get_template("invoices/print.html").render(
         {
             "pdf_mode": True,
-            "public_mode": False,
+            "public_mode": public_mode,
             "preview_mode": True,
             "app_css": "",
             "back_url": None,
@@ -281,8 +281,11 @@ def test_multi_page_pdf_keeps_each_item_description_and_metadata_together():
 
 
 @pytest.mark.parametrize("invoice_style", ["modern", "classic", "minimal"])
-def test_invoice_pdf_payment_layout_is_stable_across_invoice_styles(invoice_style: str, tmp_path: Path):
-    html = _render_invoice_pdf_html(invoice_style=invoice_style)
+@pytest.mark.parametrize("public_mode", [False, True], ids=["internal", "public"])
+def test_invoice_pdf_payment_layout_is_stable_across_invoice_styles(
+    invoice_style: str, public_mode: bool, tmp_path: Path
+):
+    html = _render_invoice_pdf_html(invoice_style=invoice_style, public_mode=public_mode)
 
     with playwright_sync.sync_playwright() as p:
         browser = _launch_chromium_or_skip(p)
@@ -332,5 +335,8 @@ def test_invoice_pdf_payment_layout_is_stable_across_invoice_styles(invoice_styl
 
         artifact_root = Path(os.getenv("PLAYWRIGHT_ARTIFACT_DIR") or tmp_path)
         artifact_root.mkdir(parents=True, exist_ok=True)
-        page.locator(".pdf-doc").screenshot(path=str(artifact_root / f"invoice-pdf-layout-{invoice_style}.png"))
+        mode = "public" if public_mode else "internal"
+        page.locator(".pdf-doc").screenshot(
+            path=str(artifact_root / f"invoice-pdf-layout-{invoice_style}-{mode}.png")
+        )
         browser.close()
