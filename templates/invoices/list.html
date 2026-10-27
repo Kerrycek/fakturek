@@ -384,11 +384,13 @@
         const trigger = menu.querySelector(".row-actions-trigger");
         if (!trigger) return;
 
-        trigger.addEventListener("click", () => {
-          window.setTimeout(() => {
-            if (menu.open) closeRowActionMenus(menu);
-            positionRowActionMenu(menu);
-          }, 0);
+        trigger.addEventListener("click", (event) => {
+          // Position the panel in the same event as opening it, before it
+          // can be painted at its unpositioned fallback coordinates.
+          event.preventDefault();
+          menu.open = !menu.open;
+          if (menu.open) closeRowActionMenus(menu);
+          positionRowActionMenu(menu);
         });
       });
 
