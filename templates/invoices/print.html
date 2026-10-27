@@ -960,6 +960,11 @@
         border-radius: 8px;
         box-shadow: 0 18px 44px rgba(24, 36, 51, 0.08);
       }
+      /* Public PDF routes use both modes. Preserve the approved plain-paper
+         appearance even when the PDF renderer gains support for web effects. */
+      body.pdf-mode.public-mode .invoice-paper {
+        box-shadow: none;
+      }
       body.public-mode .invoice-header {
         grid-template-columns: minmax(0, 1fr) minmax(250px, 300px);
         gap: 1.25rem;

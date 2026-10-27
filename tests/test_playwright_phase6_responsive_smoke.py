@@ -187,6 +187,19 @@ def test_phase6_responsive_core_routes_have_no_unintended_horizontal_scroll(
                             """,
                             center,
                         )
+                        # Opening must also stay in the viewport when the
+                        # native summary is activated from the keyboard.
+                        trigger = table.locator(".row-actions-trigger")
+                        trigger.click()
+                        assert not panel.is_visible()
+                        trigger.focus()
+                        trigger.press("Enter")
+                        keyboard_box = panel.bounding_box()
+                        assert keyboard_box is not None
+                        assert 0 <= keyboard_box["x"]
+                        assert keyboard_box["x"] + keyboard_box["width"] <= width
+                        trigger.press("Space")
+                        assert not panel.is_visible()
                     page.screenshot(
                         path=str(artifact_root / f"{width}px-{_safe_screenshot_name(name)}.png"),
                         full_page=True,

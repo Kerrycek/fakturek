@@ -6,13 +6,13 @@ on:
     branches:
       - main
       - master
-      - "codex/**"
   pull_request:
 
 jobs:
   test:
     name: Tests and Playwright smoke
-    runs-on: ubuntu-latest
+    # Playwright 1.60 supports Ubuntu 24.04, not the moving latest image.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     steps:
@@ -27,6 +27,8 @@ jobs:
 
       - name: Install dependencies
         run: |
+          sudo apt-get update
+          sudo apt-get install -y poppler-utils
           python -m pip install --require-hashes -r requirements.lock
           python -m pip install --require-hashes -r requirements-dev.lock
           python -m playwright install --with-deps chromium
