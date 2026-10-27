@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import fakturek
+
 CHILD = r'''
 from fakturek.fakturoid_import import _extract_pdf_text_lines
 body = (
@@ -30,7 +32,7 @@ def test_pdf_import_rejects_truncated_xref_without_hanging():
     # the test runner process and kill it if the reader stops making progress.
     result = subprocess.run(
         [sys.executable, "-c", CHILD],
-        cwd=Path(__file__).resolve().parents[1],
+        cwd=Path(fakturek.__file__).resolve().parents[1],
         text=True,
         capture_output=True,
         timeout=5,
